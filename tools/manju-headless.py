@@ -659,7 +659,14 @@ def cmd_compose(args):
         raise SystemExit("没有可合成的镜头")
     if args.range:
         lo, hi = args.range
-        names = [n for n in names if lo <= int(re.sub(r"\D", "", n) or 0) <= hi]
+
+        # 先削掉扩展名再取数字：直接对 "s01.mp4" 抽 \d+ 会把 mp4 里的 4 也捞进来，
+        # 得到 "014" = 14，于是 --range 1 1 一个镜头都筛不出来（实测踩过）。
+        def shot_num(name):
+            m = re.search(r"(\d+)", os.path.splitext(name)[0])
+            return int(m.group(1)) if m else 0
+
+        names = [n for n in names if lo <= shot_num(n) <= hi]
 
     dur = []
     for nm in names:
