@@ -1133,7 +1133,7 @@ def ass_time(sec):
     return "%d:%s:%s.%s" % (h, p2(m), p2(ss), p2(cs))
 
 
-def build_ass(shots, starts, width, height, size_pct=5.0, tail_trim=0.0):
+def build_ass(shots, starts, width, height, size_pct=5.0, tail_trim=0.0, fade_ms=140):
     """生成 ASS 字幕。
 
     `tail_trim` 是"每镜尾部被下一镜吃掉的秒数"：
@@ -1189,9 +1189,11 @@ def build_ass(shots, starts, width, height, size_pct=5.0, tail_trim=0.0):
             t1 = start + each * (k + 1) - 0.06
             if t1 - t0 < 0.2:
                 continue
-            lines.append("Dialogue: 0,%s,%s,%s,%s,0,0,0,,%s" % (
+            lines.append("Dialogue: 0,%s,%s,%s,%s,0,0,0,,%s%s" % (
                 ass_time(t0), ass_time(t1), "旁白" if is_narr else "对白",
-                str((d or {}).get("speaker") or ""), wrap_ass_text(txt, max_units)))
+                str((d or {}).get("speaker") or ""),
+                ("{\\fad(%d,%d)}" % (int(fade_ms), int(fade_ms))) if fade_ms else "",
+                wrap_ass_text(txt, max_units)))
             n += 1
     return "\n".join(lines), n, size, max_units
 

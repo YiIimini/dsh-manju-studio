@@ -223,5 +223,12 @@ ok(has(py, 'fromSeries'), '登记时标记来源集')
 ok(has(py, 'series_pull(pid, series, kind, item, assets)'), '生成前先尝试从池复用')
 ok(/if reused:\s*\n\s*print/.test(py) || has(py, '从系列池复用'), '复用数量可观测')
 
+console.log('== 字幕淡入（KB 漫剧字幕规则）==')
+ok(has(py, 'fade_ms=140'), '驱动器 build_ass 有淡入参数（140ms）')
+ok(has(py, '{\\\\fad('), '驱动器字幕写入 \\fad 标签')
+ok(has(host, 'const fadeMs = o.subtitleFadeMs === undefined ? 140'), '宿主 buildAss 有淡入默认值')
+ok(has(host, '+ (fadeMs ? \'{\\\\fad(\' + fadeMs'), '宿主字幕写入 \\fad 标签')
+ok(has(py, 'def series_find(') && has(py, 'def series_pull('), '系列池函数齐备（跨集同一张脸）')
+
 console.log('\n结果：PASS=' + pass + ' FAIL=' + fail)
 process.exit(fail ? 1 : 0)

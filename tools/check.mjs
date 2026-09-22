@@ -74,6 +74,9 @@ const SUITES = [
   ['媒体接口缓存/Range', 'manju-file-test.mjs', null],
   ['项目增删/日志', 'manju-crud-test.mjs', null],
   ['UI 结构与契约', 'manju-ui-test.mjs', null],
+  // 发布前自审：按知识库的漫剧规范逐条量产出（字幕单行/淡入/无重叠、17k+5 帧网格、
+  // 台词 ≤20 字、接镜是否用了、成片时长与分辨率）。默认审 tingguiren，项目不存在则跳过。
+  ['发布前自审', 'manju-audit-test.mjs', null],
   ['状态扫描', 'sweep-blank.mjs', 'yaolu-yeyu'],
 ]
 let ran = 0
