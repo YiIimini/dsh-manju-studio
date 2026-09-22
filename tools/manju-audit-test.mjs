@@ -16,6 +16,8 @@ import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 
 const PID = process.argv[2] || 'tingguiren'
+// 第二参数 = 集号（项目内分集）。给了就只审那一集的成片与字幕。
+const EP = (process.argv[3] || '').trim()
 const DIR = path.join('D:\\Ai\\漫剧', PID)
 const FF = 'ffprobe'
 
@@ -37,11 +39,11 @@ const tsec = (t) => {
   return Number(p[0]) * 3600 + Number(p[1]) * 60 + Number(p[2]) + Number(p[3] || 0) / 100
 }
 
-console.log('== 发布前自审：' + PID + ' ==')
+console.log('== 发布前自审：' + PID + (EP ? ' · ' + EP : '') + ' ==')
 if (!fs.existsSync(DIR)) { skipped('项目不存在：' + DIR); console.log('\n结果：PASS=' + pass + ' FAIL=' + fail + ' SKIP=' + skip); process.exit(0) }
 
 // ── 1. 字幕规则（知识库：单行 ≤32、同屏一行、淡入）──
-const assPath = path.join(DIR, 'output', 'final.ass')
+const assPath = path.join(DIR, 'output', EP ? 'final-' + EP + '.ass' : 'final.ass')
 if (!fs.existsSync(assPath)) {
   skipped('还没有 final.ass（先 compose）')
 } else {
@@ -62,7 +64,9 @@ if (!fs.existsSync(assPath)) {
 
 // ── 2. 帧网格 + 台词长度（知识库：17k+5 网格、台词 ≤20 字）──
 const meta = JSON.parse(fs.readFileSync(path.join(DIR, 'plan.meta.json'), 'utf8'))
-const shots = meta.shots || []
+const allShots = meta.shots || []
+const shots = EP ? allShots.filter((s) => String(s.episode || '') === EP) : allShots
+ok(shots.length > 0, (EP ? EP + ' ' : '') + '有镜头（' + shots.length + '）')
 const badLen = shots.filter((s) => (s.length - 5) % 17 !== 0)
 ok(badLen.length === 0, '每镜帧数落在 17k+5 网格', badLen.map((s) => s.id + '=' + s.length).join(','))
 const longLine = []
@@ -70,7 +74,8 @@ for (const s of shots) for (const d of (s.dialogue || [])) if (vwidth(d.text) > 
 ok(longLine.length === 0, '单句台词 ≤20 字（KB 漫剧创作规范）', longLine.join(','))
 
 // ── 3. 拼接锁：接镜（续镜尾帧作首帧）──
-const render = fs.existsSync(path.join(DIR, '_render.json')) ? JSON.parse(fs.readFileSync(path.join(DIR, '_render.json'), 'utf8')) : null
+const rdoc = path.join(DIR, EP ? '_render-' + EP + '.json' : '_render.json')
+const render = fs.existsSync(rdoc) ? JSON.parse(fs.readFileSync(rdoc, 'utf8')) : null
 if (render) {
   const chained = (render.shots || []).filter((s) => (s.guides || []).length).map((s) => s.id)
   ok(chained.length > 0, '至少一镜用了"续镜尾帧作首帧"（KB 拼接 5 锁之一）：' + (chained.join(',') || '无'))
@@ -79,7 +84,7 @@ if (render) {
 } else { skipped('没有 _render.json（先 sync）') }
 
 // ── 4. 成片规格（漫剧档 60~90 秒）──
-const final = path.join(DIR, '成片.mp4')
+const final = path.join(DIR, EP ? '成片-' + EP + '.mp4' : '成片.mp4')
 if (!fs.existsSync(final)) { skipped('还没有成片.mp4') } else {
   const r = spawnSync(FF, ['-v', 'error', '-print_format', 'json', '-show_format', '-show_streams', final], { encoding: 'utf8' })
   const j = JSON.parse(r.stdout || '{}')

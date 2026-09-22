@@ -675,6 +675,178 @@ def extract_last_frame(pid, clip_rel, dst_rel):
     return dst
 
 
+# ───────────────────────── 分集（项目内）─────────────────────────
+#
+# **一集 = 一个项目是错的**：工作台本身就是"一个项目 = 一部剧"——
+# pickShots 按镜头自己的 `episode` 字段过滤，客户端也有「章节/集/镜头」筛选。
+# 一集一项目会把资产、封面、列表全拆散，用户还得自己在列表里认谁是谁。
+# 所以分集体现在三处：
+#   * 镜头的 `episode` 字段（ep01/ep02…），**镜头 id 带集前缀**（ep01-s01）——
+#     工作台靠 id 把产物映射回分镜，前缀让两集的 s01 不会互相顶掉；
+#   * 提示词按集分目录：prompts/<ep>/<sid>.txt；
+#   * 成片按集出：成片-<ep>.mp4（都以「成片」开头，工作台的 clipsOf 会正确排除它们）。
+def shot_episode(shot):
+    return str((shot or {}).get("episode") or "").strip()
+
+
+def episodes_in(plan):
+    seen, out = {}, []
+    for s in ((plan or {}).get("shots") or []):
+        e = shot_episode(s)
+        if e and e not in seen:
+            seen[e] = True
+            out.append(e)
+    return out
+
+
+def render_doc_path(pid, episode):
+    """某集的渲染清单路径；不传集就是项目级的 _render.json（兼容老用法）。"""
+    return project_path(pid, ("_render-%s.json" % episode) if episode else "_render.json")
+
+
+def cmd_absorb(args):
+    """
+    把一个独立项目**吸收成本项目的某一集**。
+
+    存在的理由：分集本该在项目内做，但"一集一项目"是很容易犯的错（我自己就犯了）。
+    与其让用户手工搬文件，不如给一条可复现、会做校验的吸收通路。
+    搬完**不动源项目**（只报告），由调用方决定是否清理。
+    """
+    dst = args.project
+    src = args.source
+    ep = str(args.episode or "").strip()
+    need_project(dst)
+    need_project(src)
+    if not re.match(r"^[A-Za-z0-9_-]{1,20}$", ep):
+        raise SystemExit("--episode 非法（字母/数字/下划线/连字符）")
+
+    src_plan = read_json(project_path(src, "plan.meta.json"), None)
+    if not src_plan or not src_plan.get("shots"):
+        raise SystemExit("源项目没有 plan.meta.json 或 shots 为空")
+    dst_plan = read_json(project_path(dst, "plan.meta.json"), None)
+    if not dst_plan:
+        raise SystemExit("目标项目没有 plan.meta.json")
+
+    print("吸收 %s → %s 的 %s（%d 镜）" % (src, dst, ep, len(src_plan["shots"])))
+
+    # ── 1. 角色/场景：按 id/name 合并（同一个人只留一张卡）──
+    for kind in ("characters", "scenes"):
+        have = {}
+        for c in (dst_plan.get(kind) or []):
+            if c.get("id"):
+                have[str(c["id"])] = True
+            if c.get("name"):
+                have["n:" + str(c["name"])] = True
+        for c in (src_plan.get(kind) or []):
+            if c.get("id") in have or ("n:" + str(c.get("name"))) in have:
+                continue
+            dst_plan.setdefault(kind, []).append(c)
+
+    # ── 2. 镜头：改 id 前缀 + 打 episode 标记 ──
+    dst_shots = dst_plan.get("shots") or []
+    used = {str(s.get("id")) for s in dst_shots}
+    id_map = {}
+    for s in src_plan["shots"]:
+        old = str(s.get("id") or "")
+        new = "%s-%s" % (ep, old)
+        if new in used:
+            raise SystemExit("目标项目里已存在镜头 id：%s（先清掉再吸收）" % new)
+        id_map[old] = new
+        one = dict(s)
+        one["id"] = new
+        one["episode"] = ep
+        pf = str(s.get("prompt_file") or ("prompts/%s.txt" % old))
+        # 先削扩展名再拼：basename("prompts/s01.txt") = "s01.txt"，
+        # 直接拼 ".txt" 会得到 s01.txt.txt（实测踩过一次）
+        one["prompt_file"] = "prompts/%s/%s.txt" % (ep, os.path.splitext(os.path.basename(pf))[0])
+        dst_shots.append(one)
+        used.add(new)
+    dst_plan["shots"] = dst_shots
+    if not dst_plan.get("style") and src_plan.get("style"):
+        dst_plan["style"] = src_plan["style"]
+    write_json(project_path(dst, "plan.meta.json"), dst_plan)
+
+    # ── 3. 提示词 ──
+    pdir = project_path(dst, "prompts", ep)
+    os.makedirs(pdir, exist_ok=True)
+    moved = 0
+    for old, new in id_map.items():
+        sp = project_path(src, "prompts", "%s.txt" % old)
+        if os.path.isfile(sp):
+            shutil.copyfile(sp, os.path.join(pdir, "%s.txt" % old))
+            moved += 1
+    print("  提示词 %d 份 → prompts/%s/" % (moved, ep))
+
+    # ── 4. 产物：<sid>.mp4 → <ep>-<sid>.mp4；成片 → 成片-<ep>.mp4 ──
+    clips = 0
+    for old, new in id_map.items():
+        sp = project_path(src, "%s.mp4" % old)
+        if os.path.isfile(sp):
+            shutil.copyfile(sp, project_path(dst, "%s.mp4" % new))
+            clips += 1
+    for name in ("成片.mp4",):
+        sp = project_path(src, name)
+        if os.path.isfile(sp):
+            shutil.copyfile(sp, project_path(dst, "成片-%s.mp4" % ep))
+            print("  成片 → 成片-%s.mp4" % ep)
+    print("  产物 %d 个 → %s-*.mp4" % (clips, ep))
+
+    # ── 5. 剧本 / 封面 / 资产图 ──
+    for name in os.listdir(project_path(src, "script")) if os.path.isdir(project_path(src, "script")) else []:
+        if name.lower().endswith(".md"):
+            tgt = project_path(dst, "script", "%s-%s" % (ep, name))
+            if not os.path.isfile(tgt):
+                shutil.copyfile(project_path(src, "script", name), tgt)
+    for name in ("cover.png",):
+        sp = project_path(src, name)
+        if os.path.isfile(sp):
+            shutil.copyfile(sp, project_path(dst, "cover-%s.png" % ep))
+    assets = read_json(project_path(dst, "assets.json"), {"characters": [], "scenes": [], "props": []})
+    src_assets = read_json(project_path(src, "assets.json"), {"characters": [], "scenes": [], "props": []})
+    for kind in ("characters", "scenes", "props"):
+        assets.setdefault(kind, [])
+        have = {str(a.get("id")) for a in assets[kind]} | {str(a.get("name")) for a in assets[kind]}
+        for a in (src_assets.get(kind) or []):
+            if not a or not a.get("image"):
+                continue
+            if str(a.get("id")) in have or str(a.get("name")) in have:
+                continue
+            rel = str(a["image"])
+            sp = project_path(src, rel.replace("/", os.sep))
+            if os.path.isfile(sp):
+                tp = project_path(dst, rel.replace("/", os.sep))
+                os.makedirs(os.path.dirname(tp), exist_ok=True)
+                shutil.copyfile(sp, tp)
+            assets[kind].append(a)
+    write_json(project_path(dst, "assets.json"), assets)
+
+    # ── 6. 重建目标项目的 plan.json / shots.json，供工作台读取 ──
+    print("吸收完成。接着跑 build + sync 让它生效。")
+    return 0
+
+
+def cmd_episodes(args):
+    """列出本项目的分集概况（集号 / 镜数 / 已渲 / 成片）。"""
+    pid = args.project
+    need_project(pid)
+    plan = read_json(project_path(pid, "plan.meta.json"), None) or {}
+    clips = {c["shot"] for c in clips_of(pid)}
+    eps = episodes_in(plan)
+    per = {}
+    for s in plan.get("shots") or []:
+        e = shot_episode(s) or "（未分集）"
+        d = per.setdefault(e, {"n": 0, "done": 0})
+        d["n"] += 1
+        if str(s.get("id")) in clips:
+            d["done"] += 1
+    print("项目 %s：%d 集 / %d 镜" % (pid, len(eps), len(plan.get("shots") or [])))
+    for e in (eps + (["（未分集）"] if "（未分集）" in per else [])):
+        d = per.get(e) or {"n": 0, "done": 0}
+        fin = os.path.isfile(project_path(pid, "成片-%s.mp4" % e))
+        print("  %-8s %2d 镜 · 已渲 %2d · 成片 %s" % (e, d["n"], d["done"], "有" if fin else "无"))
+    return 0
+
+
 def cmd_sync(args):
     pid = args.project
     need_project(pid)
@@ -682,6 +854,18 @@ def cmd_sync(args):
     plan = read_json(project_path(pid, "plan.json"), None)
     if not plan or not plan.get("shots"):
         raise SystemExit("缺少 plan.json 或 shots 为空")
+
+    # 分集过滤：shots.json 永远写**全本**（工作台要看得见所有集），
+    # 只有渲染清单 _render-<ep>.json 按集收敛。
+    ep = str(getattr(args, "episode", "") or "").strip()
+    if ep:
+        keep = [s for s in plan["shots"] if shot_episode(s) == ep]
+        if not keep:
+            raise SystemExit("这一集没有镜头：%s（本项目可用的集：%s）"
+                             % (ep, "、".join(episodes_in(plan)) or "无"))
+        plan_for_render = dict(plan, shots=keep)
+    else:
+        plan_for_render = plan
 
     # shots.json 与 plan.json 同构（工作台里 plan 是作者方案、shots 是渲染源）
     shots_doc = {k: v for k, v in plan.items()}
@@ -694,7 +878,7 @@ def cmd_sync(args):
 
     shots, ref_total, with_ref, missing_all, chained, chain_miss = [], 0, 0, [], 0, []
     prev_id = ""
-    for s in plan["shots"]:
+    for s in plan_for_render["shots"]:
         one = dict(s)
         # 字段名转换是渲染器契约的一部分：方案里叫 h3_prompt（工作台/方案阶段的写法），
         # manju.py 只认 `prompt`。漏了这一步 15 个镜头会全部在 0 秒内报"没有 prompt"。
@@ -749,8 +933,13 @@ def cmd_sync(args):
             "fps": params.get("fps") or 24,
         },
     }
-    write_json(project_path(pid, "_render.json"), render_doc)
-    print("已写 shots.json（%d 镜）与 _render.json" % len(shots))
+    write_json(render_doc_path(pid, ep), render_doc)
+    # 工作台的「渲染」按钮只认 _render.json：分集渲染时把它指向**刚 sync 的那一集**，
+    # 另存一份 _render-<ep>.json 作为该集的确定清单。
+    if ep:
+        write_json(project_path(pid, "_render.json"), render_doc)
+    print("已写 shots.json（%d 镜，全本）与 %s%s"
+          % (len(shots), os.path.basename(render_doc_path(pid, ep)), ("（集 %s）" % ep) if ep else ""))
     print("参考图 %d 张 · 走 Ref2VA %d/%d 镜 · ref_image_size=%s · accel=%s"
           % (ref_total, with_ref, len(shots), render_doc["defaults"]["ref_image_size"],
              render_doc["defaults"]["accel"]))
@@ -828,8 +1017,11 @@ def dry_run_graphs(rj, pid):
 def cmd_render(args):
     pid = args.project
     need_project(pid)
-    rj = project_path(pid, "_render.json")
+    ep = str(getattr(args, "episode", "") or "").strip()
+    rj = render_doc_path(pid, ep)
     if not os.path.isfile(rj):
+        if ep:
+            raise SystemExit("缺少 _render-%s.json —— 先跑 sync --project %s --episode %s" % (ep, pid, ep))
         raise SystemExit("缺少 _render.json —— 先跑 sync")
     only = [str(x) for x in (args.only or [])]
     if only:
@@ -1009,7 +1201,7 @@ def pick_font():
     return ""
 
 
-def make_intro(pid, seconds=3.0):
+def make_intro(pid, seconds=3.0, ep=""):
     """
     片头卡：把一张场景图压暗，叠上片名与集名，带淡入淡出。
 
@@ -1020,7 +1212,13 @@ def make_intro(pid, seconds=3.0):
     """
     meta, params = params_of(pid)
     title = str(meta.get("title") or "").strip()
-    ep = str(meta.get("episode") or "").strip()
+    ep_id = str(ep or "").strip()
+    ep_label = str(meta.get("episode") or "").strip()
+    # 分集片头：project.json 的 episodes 映射给每一集自己的集名
+    eps = meta.get("episodes") or {}
+    if ep_id and isinstance(eps, dict) and eps.get(ep_id):
+        ep_label = str(eps[ep_id])
+    ep = ep_label
     if not title:
         return None
     font = pick_font()
@@ -1079,7 +1277,7 @@ def make_intro(pid, seconds=3.0):
           % (font_arg, os.path.basename(tf_sub), size_s, int(h * 0.50))
         + "fade=t=in:st=0:d=0.5,fade=t=out:st=%.2f:d=0.6,format=yuv420p[v]" % fade_out
     )
-    out = project_path(pid, "_intro.mp4")
+    out = project_path(pid, ("_intro-%s.mp4" % ep_id) if ep_id else "_intro.mp4")
     cmd = [FFMPEG, "-y", "-hide_banner", "-loglevel", "error",
            "-loop", "1", "-framerate", str(fps), "-i", bg,
            "-f", "lavfi", "-i", "anullsrc=r=32000:cl=stereo",
@@ -1095,7 +1293,9 @@ def make_intro(pid, seconds=3.0):
     info = ffprobe_one(out)
     print("片头卡 %s（%s / %s）%.2fs" % (os.path.basename(out), title, ep or "-",
                                         (info or {}).get("duration") or 0))
-    return "_intro.mp4"
+    # **返回真正写出来的那个文件名**。原来硬编码 return "_intro.mp4"，
+    # 分集之后就变成"两集都去用同一个老文件"——ep02 的成片里嵌的是 ep01 那张卡（实测踩到）。
+    return os.path.basename(out)
 
 
 def visual_width(s):
@@ -1213,6 +1413,25 @@ def cmd_compose(args):
         transition = "cut"
 
     clips = [c for c in clips_of(pid) if not c["final"] and not c["take"]]
+    # ── 分集合成 ──
+    # 按该集的渲染清单选片并**按清单顺序**排列（不靠文件名字典序猜），
+    # 产物写 成片-<ep>.mp4 —— 都以「成片」开头，工作台的 clipsOf 会把它当 final 排除掉。
+    ep = str(getattr(args, "episode", "") or "").strip()
+    out_name = "成片.mp4"
+    ass_rel = "output/final.ass"
+    if ep:
+        rdoc = read_json(render_doc_path(pid, ep), None)
+        if not rdoc or not rdoc.get("shots"):
+            raise SystemExit("缺少 _render-%s.json —— 先 sync --episode %s" % (ep, ep))
+        want = [str(s.get("id")) for s in rdoc["shots"]]
+        order = {sid: i for i, sid in enumerate(want)}
+        clips = [c for c in clips if c["shot"] in order]
+        clips.sort(key=lambda c: order.get(c["shot"], 10 ** 6))
+        miss = [sid for sid in want if not any(c["shot"] == sid for c in clips)]
+        if miss:
+            raise SystemExit("这一集还有 %d 镜没渲染：%s" % (len(miss), "、".join(miss[:8])))
+        out_name = "成片-%s.mp4" % ep
+        ass_rel = "output/final-%s.ass" % ep
     names = [c["name"] for c in clips]
     if not names:
         raise SystemExit("没有可合成的镜头")
@@ -1230,7 +1449,7 @@ def cmd_compose(args):
     # 片头卡：作为第 1 段参与时长/起点累加，字幕时间轴会自动整体后移 ——
     # 它不在 plan 里，没有台词，所以不产生任何字幕。
     if args.intro:
-        card = make_intro(pid, args.intro_seconds)
+        card = make_intro(pid, args.intro_seconds, ep)
         if card:
             names = [card] + names
 
@@ -1259,15 +1478,15 @@ def cmd_compose(args):
     sub_filter = ""
     if built[1] > 0:
         os.makedirs(project_path(pid, "output"), exist_ok=True)
-        with open(project_path(pid, "output", "final.ass"), "w", encoding="utf-8") as fh:
+        with open(project_path(pid, ass_rel.replace("/", os.sep)), "w", encoding="utf-8") as fh:
             fh.write(built[0])
         # libass 不认带引号的 Windows 盘符绝对路径 → 用相对路径 + cwd=项目根
-        sub_filter = "subtitles=filename=output/final.ass"
+        sub_filter = "subtitles=filename=" + ass_rel
 
     af = "loudnorm=I=%s:TP=-1.5:LRA=11" % loud
     venc = ["-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p"]
     aenc = ["-c:a", "aac", "-b:a", "192k", "-ar", "48000"]
-    target = os.path.join(d, "成片.mp4")
+    target = os.path.join(d, out_name)
     if os.path.isfile(target):
         os.remove(target)
 
@@ -1575,8 +1794,20 @@ def main():
     cv.add_argument("--force", action="store_true")
     cv.set_defaults(func=cmd_cover)
 
+    # ── 子命令注册 ──
+    ab = sub.add_parser("absorb", help="把一个独立项目吸收成本项目的某一集")
+    ab.add_argument("--project", required=True, help="目标（主）项目")
+    ab.add_argument("--source", required=True, help="要被吸收的项目")
+    ab.add_argument("--episode", required=True, help="集号，如 ep02")
+    ab.set_defaults(func=cmd_absorb)
+
+    ep = sub.add_parser("episodes", help="列出本项目的分集概况")
+    ep.add_argument("--project", required=True)
+    ep.set_defaults(func=cmd_episodes)
+
     s = sub.add_parser("sync", help="解析参考图 → _render.json")
     s.add_argument("--project", required=True)
+    s.add_argument("--episode", default="", help="只同步这一集（shots.json 仍写全本）")
     s.set_defaults(func=cmd_sync)
 
     r = sub.add_parser("render", help="调 manju.py 渲染")
@@ -1587,6 +1818,7 @@ def main():
     r.add_argument("--no-free", dest="no_free", action="store_true", help="渲染后不归还 ComfyUI 显存")
     r.add_argument("--dry-run", dest="dry_run", action="store_true",
                    help="只构图检查（不提交渲染）：0 秒内暴露参数/接线错误")
+    r.add_argument("--episode", default="", help="只渲染这一集")
     r.set_defaults(func=cmd_render)
 
     q = sub.add_parser("qc", help="机械质检")
@@ -1602,6 +1834,7 @@ def main():
     c.add_argument("--intro", action="store_true", help="加片头卡（片名 + 集名，取自 project.json）")
     c.add_argument("--intro-seconds", dest="intro_seconds", type=float, default=3.0)
     c.add_argument("--no-subtitles", dest="no_subtitles", action="store_true")
+    c.add_argument("--episode", default="", help="只合成这一集 → 成片-<集>.mp4")
     c.set_defaults(func=cmd_compose)
 
     st = sub.add_parser("status", help="项目状态")
