@@ -16,8 +16,10 @@ import fs from 'node:fs'
 
 const HOST = 'D:\\Ai\\DSH-plugins\\dsh-manju-studio\\lib\\index.js'
 const CLIENT = 'D:\\Ai\\DSH-plugins\\dsh-manju-studio\\lib\\client.js'
+const HEADLESS = 'D:\\Ai\\DSH-plugins\\dsh-manju-studio\\tools\\manju-headless.py'
 const host = fs.readFileSync(HOST, 'utf8')
 const cli = fs.readFileSync(CLIENT, 'utf8')
+const py = fs.readFileSync(HEADLESS, 'utf8')
 
 let pass = 0
 let fail = 0
@@ -154,6 +156,25 @@ console.log('== 分段函数的行为验证（喂真实管线日志）==')
       '没有阶段标记的纯渲染日志按镜头平铺为顶层分段', only.map((x) => x.title).join('|'))
   }
 }
+
+console.log('== 表头排版 / 质检报告契约 / 接镜 ==')
+ok(has(cli, '.mj-phtitle{flex:0 1 auto'), '面板标题 nowrap + 省略号（窄列里不该折成两行）')
+ok(has(cli, '.mj-ph{display:flex') && cli.indexOf('.mj-ph{display:flex') >= 0
+  && /\.mj-ph\{[^}]*flex-wrap:nowrap/.test(cli), '表头 nowrap（否则 224px 里会挤爆）')
+ok(has(cli, '.mj-refresh.ic{'), '刷新按钮有紧凑图标版（窄列用）')
+ok(has(cli, 'className: "mj-refresh ic"'), '成品列表用图标版刷新（标题+计数+按钮在 224px 里塞不下）')
+ok(has(cli, '.mj-ph>.mj-row,.mj-ph>.mj-tag,.mj-ph>.mj-fill{flex:0 0 auto'), '表头右侧槽位不参与压缩')
+// 质检报告契约：客户端读 qc.byFile[sid].ok 判合格/不合格，
+// 少写这个字段会让**全部镜头显示不合格**（真踩过）
+ok(py.indexOf('rec["ok"] = len(rec["problems"]) == 0') >= 0, '驱动器写 ok 字段（故事板判合格/不合格的唯一依据）')
+ok(py.indexOf('"warned": warned') >= 0, '质检报告顶层带 warned')
+ok(py.indexOf('def extract_last_frame(') >= 0, '有末帧抽取（镜间衔接用）')
+ok(py.indexOf('chain_from_prev') >= 0, '接镜开关：把上一镜末帧钉在本镜第 0 帧')
+ok(py.indexOf('"guides"') >= 0 || py.indexOf('one["guides"]') >= 0, '接镜通过 guides 接线')
+ok(py.indexOf('def dry_run_graphs(') >= 0, 'render --dry-run：构图检查不提交')
+// 字幕窗口必须扣掉叠化时被下一镜吃掉的尾部，否则转场处两条字幕同时在屏
+ok(host.indexOf('const tailTrim = Number(o.tailTrim) || 0') >= 0, '宿主 buildAss 支持 tailTrim')
+ok(/tailTrim: transition === 'fade' \? F : 0/.test(host), '宿主叠化时传入转场时长作为 tailTrim')
 
 console.log('\n结果：PASS=' + pass + ' FAIL=' + fail)
 process.exit(fail ? 1 : 0)

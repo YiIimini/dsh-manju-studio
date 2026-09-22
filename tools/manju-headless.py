@@ -413,6 +413,21 @@ def resolve_refs(pid, shot, name_of):
     return refs, missing
 
 
+def extract_last_frame(pid, clip_rel, dst_rel):
+    """抽某一镜的**末帧**存成 jpg —— 用于把它钉到下一镜的第 0 帧（镜间衔接）。"""
+    src = project_path(pid, clip_rel.replace("/", os.sep))
+    if not os.path.isfile(src):
+        return None
+    dst = project_path(pid, dst_rel.replace("/", os.sep))
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    # -sseof 从结尾往前 seek：不能用 -ss <时长>，容器时长有小数误差会取到黑帧
+    code, _out, _err = run([FFMPEG, "-y", "-hide_banner", "-loglevel", "error",
+                            "-sseof", "-0.12", "-i", src, "-frames:v", "1", "-q:v", "2", dst], timeout=180)
+    if code != 0 or not os.path.isfile(dst):
+        return None
+    return dst
+
+
 def cmd_sync(args):
     pid = args.project
     need_project(pid)
@@ -430,7 +445,8 @@ def cmd_sync(args):
         if c.get("id"):
             name_of[str(c["id"])] = c.get("name") or ""
 
-    shots, ref_total, with_ref, missing_all = [], 0, 0, []
+    shots, ref_total, with_ref, missing_all, chained, chain_miss = [], 0, 0, [], 0, []
+    prev_id = ""
     for s in plan["shots"]:
         one = dict(s)
         # 字段名转换是渲染器契约的一部分：方案里叫 h3_prompt（工作台/方案阶段的写法），
@@ -442,6 +458,20 @@ def cmd_sync(args):
         one.pop("dialogue", None)
         one.pop("shot_size", None)
         one.pop("camera", None)
+        # ── 镜间衔接 ──
+        # `chain_from_prev: true` = 把上一镜的**末帧**钉在本镜第 0 帧。
+        # 这是渲染器原生的做法（MiniMaxH3AddGuide，frame_idx 0），
+        # 也是唯一能让"上一镜结束的状态"真的延续到下一镜的手段 ——
+        # 光靠参考图 + 文字，两镜各自独立生成，姿态/位置/光比不会自动接上。
+        # 注意：**只该用在同一段连续动作上**。跨场硬切（如全景→特写、问心台→机枢殿）
+        # 强行接帧反而会把两种构图糅在一起，比不接更难看。
+        if s.get("chain_from_prev") and prev_id:
+            hit = extract_last_frame(pid, prev_id + ".mp4", "_frames/%s_last.jpg" % prev_id)
+            if hit:
+                one["guides"] = [{"frame_idx": 0, "image": hit}]
+                chained += 1
+            else:
+                chain_miss.append("%s←%s" % (s.get("id"), prev_id))
         if refs:
             one["ref_images"] = refs
             one["mode"] = "r2v"
@@ -452,6 +482,7 @@ def cmd_sync(args):
         if missing:
             missing_all.append("%s 缺 %s" % (s.get("id"), "/".join(missing)))
         shots.append(one)
+        prev_id = str(s.get("id") or "")
 
     render_doc = {
         "project": pid,
@@ -476,6 +507,10 @@ def cmd_sync(args):
     print("参考图 %d 张 · 走 Ref2VA %d/%d 镜 · ref_image_size=%s · accel=%s"
           % (ref_total, with_ref, len(shots), render_doc["defaults"]["ref_image_size"],
              render_doc["defaults"]["accel"]))
+    if chained:
+        print("镜间衔接：%d 镜把上一镜末帧钉在第 0 帧" % chained)
+    if chain_miss:
+        print("⚠ 想接上一镜但没有可用的末帧（该镜还没渲染过？）：" + "、".join(chain_miss))
     if missing_all:
         print("⚠ 缺参考图的镜头：" + "；".join(missing_all))
         return 1
@@ -484,16 +519,50 @@ def cmd_sync(args):
 
 # ───────────────────────── render ─────────────────────────
 
+def dry_run_graphs(rj, pid):
+    """
+    只构图、不提交：把"参数错误"和"接线问题"在 0 秒内暴露出来。
+
+    存在的理由：渲染一镜要 5 分钟，而 90% 的低级错误（长度不在 17k+5 网格、分辨率不是
+    32 倍数、参考图路径不存在、锚点帧接线写错）在构图阶段就能判死。跑真渲染去发现它们是浪费。
+    """
+    sys.path.insert(0, os.path.dirname(MANJU_PY))
+    import manju  # 渲染器本体；导入不会执行 main
+    doc = read_json(rj, {})
+    shots = doc.get("shots") or []
+    style = doc.get("style") or ""
+    cfg = doc.get("defaults") or {}
+    print("构图检查 %d 镜（不提交渲染）" % len(shots))
+    bad = 0
+    for s in shots:
+        one = dict(s)
+        one["_project"] = pid
+        try:
+            graph, meta = manju.build_graph(one, style, cfg)
+        except Exception as e:
+            print("  FAIL %-5s %s" % (s.get("id"), e))
+            bad += 1
+            continue
+        guides = [n for n in graph.values() if n.get("class_type") == "MiniMaxH3AddGuide"]
+        extra = []
+        if meta.get("ref_count"):
+            extra.append("参考图%d" % meta["ref_count"])
+        if guides:
+            extra.append("锚点%d(帧%s)" % (len(guides), ",".join(
+                str(g.get("inputs", {}).get("frame_idx")) for g in guides)))
+        print("  OK  %-5s %-6s %dx%d %d帧 seed=%-10s 节点%-3d %s" % (
+            s.get("id"), meta["mode"], meta["width"], meta["height"], meta["length"],
+            meta["seed"], len(graph), " ".join(extra)))
+    print("构图检查：%s" % ("全部通过" if not bad else "%d 镜有问题" % bad))
+    return 0 if not bad else 1
+
+
 def cmd_render(args):
     pid = args.project
     need_project(pid)
     rj = project_path(pid, "_render.json")
     if not os.path.isfile(rj):
         raise SystemExit("缺少 _render.json —— 先跑 sync")
-    if not comfy_alive():
-        raise SystemExit("ComfyUI 不可达 —— 先运行 D:\\Ai\\ComfyUI\\start-comfyui.cmd")
-    # 单镜返修：只把指定镜头摘出来重渲（隐含 --force，否则已存在的会被跳过）。
-    # 质检发现某一镜坏了时用它 —— 不必重跑整本。
     only = [str(x) for x in (args.only or [])]
     if only:
         doc = read_json(rj, {})
@@ -507,6 +576,13 @@ def cmd_render(args):
     # --out 可把产物写到别的目录：做 A/B 对比（例如换启动参数重渲同一镜）时
     # 不该覆盖已定稿的成片素材。
     outdir = args.out or project_path(pid)
+    # 构图检查放在最前：它不需要 ComfyUI 在线（只是构图 + 校验），
+    # 放在存活检查之后会让"服务没起"掩盖掉真正的参数错误。
+    if args.dry_run:
+        return dry_run_graphs(rj, pid)
+    if not comfy_alive():
+        raise SystemExit("ComfyUI 不可达 —— 先运行 D:\\Ai\\ComfyUI\\start-comfyui.cmd"
+                         "（或用 manju-headless.py comfy start）")
     env = dict(os.environ)
     env.update({"PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"})
     cmd = [PY_EXE, "-X", "utf8", MANJU_PY, "render", "--shots", rj, "--out", outdir]
@@ -557,7 +633,7 @@ def ffprobe_one(path):
 
 
 def qc_one(path, min_duration=1.0, dark_fail=0.5, dark_warn=0.15, clip_fail=-0.1):
-    rec = {"file": os.path.basename(path), "problems": [], "warnings": []}
+    rec = {"file": os.path.basename(path), "problems": [], "warnings": [], "ok": False}
     info = ffprobe_one(path)
     if not info:
         rec["problems"].append("ffprobe 读不出（文件损坏？）")
@@ -591,6 +667,10 @@ def qc_one(path, min_duration=1.0, dark_fail=0.5, dark_warn=0.15, clip_fail=-0.1
         rec["problems"].append("黑场占比 %.0f%%" % (ratio * 100))
     elif ratio >= dark_warn:
         rec["warnings"].append("黑场占比 %.0f%%" % (ratio * 100))
+    # **`ok` 是工作台故事板判"合格/不合格"的唯一依据**（客户端读 qc.byFile[sid].ok）。
+    # 漏了它 → undefined → 全部镜头显示"不合格"。工作台自己的 qcOneClip 也写这个字段
+    # （lib/index.js 的 rec.ok = rec.problems.length === 0），必须一致。
+    rec["ok"] = len(rec["problems"]) == 0
     return rec
 
 
@@ -619,13 +699,15 @@ def cmd_qc(args):
     clips = [c for c in clips_of(pid) if not c["final"] and not c["take"]]
     if not clips:
         raise SystemExit("没有可质检的镜头")
-    reports, bad = [], 0
+    reports, bad, warned = [], 0, 0
     print("%-8s%8s%12s%8s%9s%7s  %s" % ("镜头", "时长", "分辨率", "帧数", "均值dB", "黑场", "问题"))
     for c in clips:
         rec = qc_one(project_path(pid, c["name"]))
         reports.append(rec)
         if rec["problems"]:
             bad += 1
+        if rec["warnings"]:
+            warned += 1
         print("%-8s%8.2f%12s%8s%9s%7s  %s" % (
             c["shot"], rec.get("duration", 0),
             "%sx%s" % (rec.get("width"), rec.get("height")), rec.get("nb_frames") or "-",
@@ -633,7 +715,7 @@ def cmd_qc(args):
             ("%.0f%%" % (rec.get("dark_ratio", 0) * 100)),
             "；".join(rec["problems"] + rec["warnings"]) or "OK"))
     write_json(project_path(pid, "output", "qc_report.json"),
-               {"total": len(reports), "failed": bad, "reports": reports,
+               {"total": len(reports), "failed": bad, "warned": warned, "reports": reports,
                 "checkedAt": time.strftime("%Y-%m-%d %H:%M:%S")})
     print("\n质检：%d 镜，%s" % (len(reports), "全部通过" if bad == 0 else "%d 镜不合格" % bad))
     print("提醒：脚本查不出「人物崩了/风格跑偏」——画面必须抽帧后用视觉亲自看。")
@@ -783,7 +865,16 @@ def ass_time(sec):
     return "%d:%s:%s.%s" % (h, p2(m), p2(ss), p2(cs))
 
 
-def build_ass(shots, starts, width, height, size_pct=5.0):
+def build_ass(shots, starts, width, height, size_pct=5.0, tail_trim=0.0):
+    """生成 ASS 字幕。
+
+    `tail_trim` 是"每镜尾部被下一镜吃掉的秒数"：
+      * 硬切 = 0；
+      * 叠化 = 转场时长 F（默认 0.5）。
+    **不扣掉它就会出事故**：字幕窗口原本铺满整镜时长，而叠化时下一镜提前 F 秒开始，
+    于是每处转场都有 F 秒两条字幕同时压在屏幕上（实测 15 镜 = 14 处重叠、每处 0.44s）。
+    观感就是"字和画都在重影"，直接被读成"镜头前后不连贯"。
+    """
     margin_v = int(round(height * 0.06))
     size = max(18, int(round(height * size_pct / 100)))
     margin_lr = int(round(width * 0.07))
@@ -809,15 +900,18 @@ def build_ass(shots, starts, width, height, size_pct=5.0):
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
     ]
     n = 0
+    total = len(shots)
     for i, s in enumerate(shots):
         dlg = s.get("dialogue") or []
         if not dlg:
             continue
         start = starts[i] if i < len(starts) else 0
         dur = s.get("_dur") or 0
-        if dur <= 0.05:
+        # 本镜真正独占画面的时长：最后一镜不用扣，中间各镜要扣掉被下一镜吃掉的那段
+        avail = dur - (tail_trim if i < total - 1 else 0.0)
+        if avail <= 0.05:
             continue
-        each = dur / len(dlg)
+        each = avail / len(dlg)
         for k, d in enumerate(dlg):
             txt = str((d or {}).get("text") or "").strip()
             if not txt:
@@ -889,7 +983,9 @@ def cmd_compose(args):
         board.append(dict(hit, _dur=dur[i]))
 
     want_subs = args.no_subtitles is False or True
-    built = build_ass(board, starts, canvas_w, canvas_h, size_pct)
+    # 叠化时每镜尾部有 F 秒被下一镜吃掉，字幕窗口必须扣掉它，否则两条字幕会同时在屏
+    tail_trim = F if (transition == "fade" and len(names) > 1) else 0.0
+    built = build_ass(board, starts, canvas_w, canvas_h, size_pct, tail_trim)
     sub_filter = ""
     if built[1] > 0:
         os.makedirs(project_path(pid, "output"), exist_ok=True)
@@ -1201,6 +1297,8 @@ def main():
     r.add_argument("--only", nargs="*", help="只重渲这些镜头 id（单镜返修，隐含 --force）")
     r.add_argument("--out", default=None, help="产物目录（默认项目目录；A/B 对比时指向别处）")
     r.add_argument("--no-free", dest="no_free", action="store_true", help="渲染后不归还 ComfyUI 显存")
+    r.add_argument("--dry-run", dest="dry_run", action="store_true",
+                   help="只构图检查（不提交渲染）：0 秒内暴露参数/接线错误")
     r.set_defaults(func=cmd_render)
 
     q = sub.add_parser("qc", help="机械质检")
