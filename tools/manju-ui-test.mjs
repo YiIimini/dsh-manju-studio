@@ -79,5 +79,81 @@ ok(!has(cli, '[proj, prod, job, qcRep, jobRunning],\n\t\t\t);'), '不再按对�
 ok(has(cli, 'comfyAction("free")'), 'ComfyUI 页有「释放显存」按钮')
 ok(has(cli, 'decoding: "async"'), '图片用异步解码（不阻塞首屏绘制）')
 
+console.log('== 客户端：日志分段 / 倒序 / 危险操作 ==')
+ok(has(cli, 'function splitLogSections('), '日志按「阶段 → 镜头」两级分段')
+ok(has(cli, 'function LogSections('), '分段渲染组件')
+ok(has(cli, '/^\\s*━+\\s*阶段\\s*(.+?)\\s*━+\\s*$/.exec(L)'), '认得管线阶段标记 ━━━ 阶段 X ━━━')
+ok(has(cli, 'const mh = /^\\[(\\d+)\\/(\\d+)\\]\\s+(\\S+)/.exec(L)'), '认得渲染镜头标记 [3/15] s03')
+ok(has(cli, 'sections: splitLogSections(shown)'), '活日志面板走分段渲染')
+ok(has(cli, 'sections: splitLogSections(logTailLines(logView.text))'), '日志弹窗走分段渲染')
+ok(has(cli, 'const [logReverse, setLogReverse] = React.useState(true)'), '日志弹窗默认倒序（最新在上）')
+ok(has(cli, 'const [liveReverse, setLiveReverse] = React.useState(false)'), '活日志面板有正/倒序开关')
+ok(has(cli, 'el.scrollTop = liveReverse ? 0 : el.scrollHeight'), '倒序时自动吸顶、正序时吸底')
+ok(has(cli, 'function logTailLines('), '只渲染日志尾部（几百 KB 的日志不塞满 DOM）')
+ok(has(cli, '.mj-lsech{position:sticky'), '阶段标题吸顶且高对比')
+ok(has(cli, '.mj-lsub{border-left'), '镜头块用左竖线区分')
+ok(has(cli, 'const [purgeArm, setPurgeArm] = React.useState(false)'), '「直接删除」两步确认的上膛状态')
+ok(has(cli, 'doPurgeConfirmed(confirm.id)'), '接上宿主 purge')
+ok(has(cli, 'className: "mj-btn danger"'), '直接删除用危险按钮样式')
+ok(has(cli, '.mj-btn.danger.armed{'), '上膛后变实心红并脉动')
+ok(has(host, "'purge'"), '宿主有 purge 命令')
+ok(has(host, '拒绝删除：目标不是项目根目录的直接子目录'), 'purge 只允许删根目录的直接子目录')
+ok(has(host, '该项目还有任务在跑'), 'purge 拒绝删除正在跑任务的项目')
+
+console.log('== 分段函数的行为验证（喂真实管线日志）==')
+{
+  // 把 splitLogSections 从客户端源码里抽出来单独跑 —— 只断言"函数存在"太弱，
+  // 这一段要证明它真的能把「哪一步」与「这一步的第几镜」分开。
+  function extractFn(name) {
+    const i = cli.indexOf('function ' + name + '(')
+    if (i < 0) return null
+    let depth = 0
+    let started = false
+    for (let k = i; k < cli.length; k++) {
+      const ch = cli[k]
+      if (ch === '{') { depth += 1; started = true } else if (ch === '}') {
+        depth -= 1
+        if (started && depth === 0) return cli.slice(i, k + 1)
+      }
+    }
+    return null
+  }
+  const fnSrc = extractFn('splitLogSections')
+  ok(!!fnSrc, '能从源码里抽出 splitLogSections')
+  if (fnSrc) {
+    const split = new Function(fnSrc + '; return splitLogSections;')()
+    const sample = [
+      '项目 jixin-wendao | 镜头 15 | 输出 D:\\Ai\\漫剧\\jixin-wendao',
+      '━━━ 阶段 环境 ━━━',
+      '  环境就绪',
+      '━━━ 阶段 渲染 ━━━',
+      '[1/15] s01  1344x768 124帧 8步 seed=20260927 euler | ref2va 参考图1张(match)',
+      '    加速: PDD nfe=8    VAE: int8',
+      '    [s01] 渲染中 30s ...',
+      '    完成 323.4s  1.22 MB',
+      '[2/15] s02  1344x768 124帧 8步 seed=20260934 euler | ref2va 参考图2张(match)',
+      '    完成 312.3s  1.49 MB',
+      '━━━ 阶段 质检 ━━━',
+      '质检：15 镜，全部通过',
+    ]
+    const secs = split(sample)
+    const titles = secs.map((x) => x.title)
+    console.log('    分段结果 → ' + JSON.stringify(titles))
+    ok(titles.join('|') === '启动|环境|渲染|质检', '四个阶段被正确切开', titles.join('|'))
+    ok(secs[0].lines.length === 1, '首段归属「启动」（阶段标记之前的行）')
+    const render = secs.filter((x) => x.title === '渲染')[0]
+    ok(!!render && render.subs.length === 2, '渲染阶段里切出 2 个镜头块', render ? String(render.subs.length) : 'none')
+    ok(!!render && render.subs[0].title === '镜头 s01' && render.subs[0].total === '15',
+      '镜头块标题与进度取自 "[1/15] s01"', render ? JSON.stringify(render.subs[0].title) + '/' + render.subs[0].total : 'none')
+    ok(!!render && render.subs[0].lines.length === 3, '镜头块内挂住该镜自己的 3 行输出',
+      render ? String(render.subs[0].lines.length) : 'none')
+    ok(!!render && render.lines.filter((L) => L.trim()).length === 0, '渲染阶段的直属行只剩空行（都归到镜头块里了）')
+    // 纯渲染日志（没有阶段标记）也要能分段：必须**按镜头平铺**，而不是全塞进一个壳里
+    const only = split(sample.slice(4, 10))
+    ok(only.length === 2 && only[0].title === '镜头 s01' && only[1].title === '镜头 s02',
+      '没有阶段标记的纯渲染日志按镜头平铺为顶层分段', only.map((x) => x.title).join('|'))
+  }
+}
+
 console.log('\n结果：PASS=' + pass + ' FAIL=' + fail)
 process.exit(fail ? 1 : 0)

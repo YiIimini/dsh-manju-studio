@@ -72,6 +72,7 @@ const SUITES = [
   // 媒体接口契约：ETag/304 + Range/206 + HEAD + 路径穿越。
   // 这条套件是"封面一闪一闪"与"错误响应挂死"两个事故的回归闸门，放在仓库里而不是临时目录。
   ['媒体接口缓存/Range', 'manju-file-test.mjs', null],
+  ['项目增删/日志', 'manju-crud-test.mjs', null],
   ['UI 结构与契约', 'manju-ui-test.mjs', null],
   ['状态扫描', 'sweep-blank.mjs', 'yaolu-yeyu'],
 ]
