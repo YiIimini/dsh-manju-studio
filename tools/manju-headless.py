@@ -429,10 +429,22 @@ def cmd_render(args):
         raise SystemExit("缺少 _render.json —— 先跑 sync")
     if not comfy_alive():
         raise SystemExit("ComfyUI 不可达 —— 先运行 D:\\Ai\\ComfyUI\\start-comfyui.cmd")
+    # 单镜返修：只把指定镜头摘出来重渲（隐含 --force，否则已存在的会被跳过）。
+    # 质检发现某一镜坏了时用它 —— 不必重跑整本。
+    only = [str(x) for x in (args.only or [])]
+    if only:
+        doc = read_json(rj, {})
+        keep = [s for s in (doc.get("shots") or []) if str(s.get("id")) in only]
+        if not keep:
+            raise SystemExit("--only 里没有任何已知镜头：" + "、".join(only))
+        doc["shots"] = keep
+        rj = project_path(pid, "_render_fix.json")
+        write_json(rj, doc)
+        print("单镜返修：%s" % "、".join(s["id"] for s in keep), flush=True)
     env = dict(os.environ)
     env.update({"PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"})
     cmd = [PY_EXE, "-X", "utf8", MANJU_PY, "render", "--shots", rj, "--out", project_path(pid)]
-    if args.force:
+    if args.force or only:
         cmd.append("--force")
     print("渲染器：" + " ".join(cmd), flush=True)
     p = subprocess.Popen(cmd, cwd=project_path(pid), env=env,
@@ -514,6 +526,9 @@ def clips_of(pid):
     for name in sorted(os.listdir(d)):
         if not name.lower().endswith(".mp4"):
             continue
+        # 下划线开头是内部中间产物（片头卡等），不算镜头：质检与产物清单都不该看见它
+        if name.startswith("_"):
+            continue
         m = re.match(r"^(.+)_take(\d+)\.mp4$", name, re.I)
         out.append({
             "name": name,
@@ -552,6 +567,112 @@ def cmd_qc(args):
 
 
 # ───────────────────────── compose（ported from composeFinal）─────────────────────────
+
+# 片头卡字体：优先行楷/楷体（国风），退回雅黑。**用 .ttf**：.ttc 字体集合在 drawtext 里
+# 需要 `fontindex` 才能选到字面，取不准就会退成方块。
+FONT_CANDIDATES = [
+    r"C:\Windows\Fonts\STXINGKA.TTF",
+    r"C:\Windows\Fonts\simkai.ttf",
+    r"C:\Windows\Fonts\simhei.ttf",
+    r"C:\Windows\Fonts\msyh.ttc",
+]
+
+
+def pick_font():
+    for p in FONT_CANDIDATES:
+        if os.path.isfile(p):
+            return p
+    return ""
+
+
+def make_intro(pid, seconds=3.0):
+    """
+    片头卡：把一张场景图压暗，叠上片名与集名，带淡入淡出。
+
+    * 文字一律走 `textfile=`，**不写进 filter 字符串** —— 中文字面量 + 冒号 + 反斜杠
+      在 filtergraph 里要三层转义，是稳定的事故源；写进 UTF-8 文件只受一处影响。
+    * 音轨用 anullsrc **且必须是 32000 Hz 立体声**：合成用的是 concat 解复用器，
+      各段流参数必须一致，H3 产物就是 32 kHz，混进 48 kHz 会拼坏。
+    """
+    meta, params = params_of(pid)
+    title = str(meta.get("title") or "").strip()
+    ep = str(meta.get("episode") or "").strip()
+    if not title:
+        return None
+    font = pick_font()
+    if not font:
+        print("⚠ 找不到可用中文字体，跳过片头卡")
+        return None
+    w = int(params.get("width") or 1344)
+    h = int(params.get("height") or 768)
+    fps = int(params.get("fps") or 24)
+
+    bg = None
+    assets = read_json(project_path(pid, "assets.json"), {})
+    for a in (assets.get("scenes") or []):
+        p = project_path(pid, str(a.get("image") or "").replace("/", os.sep))
+        if os.path.isfile(p):
+            bg = p
+            break
+    if not bg:
+        first = [c["name"] for c in clips_of(pid) if not c["final"] and not c["take"]]
+        if first:
+            r = run([FFMPEG, "-y", "-hide_banner", "-loglevel", "error", "-i",
+                     project_path(pid, first[0]), "-frames:v", "1",
+                     project_path(pid, "_intro_bg.png")], timeout=120)
+            if r[0] == 0:
+                bg = project_path(pid, "_intro_bg.png")
+    if not bg:
+        print("⚠ 没有可用的片头底图，跳过片头卡")
+        return None
+
+    tf_title = project_path(pid, "_intro_title.txt")
+    tf_sub = project_path(pid, "_intro_sub.txt")
+    with open(tf_title, "w", encoding="utf-8") as fh:
+        fh.write(title)
+    with open(tf_sub, "w", encoding="utf-8") as fh:
+        fh.write(ep)
+
+    # 字体路径里的冒号要**两层转义**（写成 `\\:`）：
+    # filtergraph 解析器会先吃掉一层反斜杠，只写 `\:` 的话冒号会被当成选项分隔符，
+    # ffmpeg 报 "No option name near '/Windows/Fonts/...'"（实测踩过）。
+    font_arg = "fontfile=" + font.replace("\\", "/").replace(":", "\\\\:")
+    # textfile 一律用**相对文件名**（ffmpeg 以项目根为 cwd 运行）：
+    # filtergraph 里反斜杠是转义符，绝对路径 D:\Ai\漫剧\... 会被啃成 D:Ai漫剧...，
+    # 结果就是"找不到文本文件"，而报错只显示 Invalid argument（实测踩过）。
+    size_t = max(48, int(h * 0.115))
+    size_s = max(20, int(h * 0.048))
+    fade_out = max(0.1, seconds - 0.6)
+    # 标题轻微上浮：y 从 +18px 落到最终位（0.9s），比纯淡入有呼吸感
+    chain = (
+        "scale=%d:%d:force_original_aspect_ratio=increase,crop=%d:%d," % (w, h, w, h)
+        + "eq=brightness=-0.16:saturation=0.86,"
+        + "drawtext=%s:textfile=%s:fontcolor=0xF3E6C8:fontsize=%d:borderw=3:bordercolor=0x1A0F06@0.85:"
+          "x=(w-text_w)/2:y='%d+18*(1-min(t/0.9,1))':alpha='min(t/0.8,1)',"
+          % (font_arg, os.path.basename(tf_title), size_t, int(h * 0.33))
+        + "drawtext=%s:textfile=%s:fontcolor=0xD9E4F2:fontsize=%d:borderw=2:bordercolor=0x101820@0.8:"
+          "x=(w-text_w)/2:y='%d+14*(1-min(max(t-0.7,0)/0.9,1))':alpha='min(max(t-0.7,0)/0.9,1)',"
+          % (font_arg, os.path.basename(tf_sub), size_s, int(h * 0.50))
+        + "fade=t=in:st=0:d=0.5,fade=t=out:st=%.2f:d=0.6,format=yuv420p[v]" % fade_out
+    )
+    out = project_path(pid, "_intro.mp4")
+    cmd = [FFMPEG, "-y", "-hide_banner", "-loglevel", "error",
+           "-loop", "1", "-framerate", str(fps), "-i", bg,
+           "-f", "lavfi", "-i", "anullsrc=r=32000:cl=stereo",
+           "-t", "%.2f" % seconds,
+           "-filter_complex", chain, "-map", "[v]", "-map", "1:a",
+           "-c:v", "libx264", "-preset", "medium", "-crf", "18",
+           "-c:a", "aac", "-b:a", "192k", "-ar", "32000", "-ac", "2",
+           "-shortest", out]
+    code, _o, err = run(cmd, cwd=project_path(pid), timeout=600)
+    if code != 0:
+        print("⚠ 片头卡生成失败（跳过）：" + (err or "")[-300:])
+        return None
+    info = ffprobe_one(out)
+    print("片头卡 %s（%s / %s）%.2fs" % (os.path.basename(out), title, ep or "-",
+                                        (info or {}).get("duration") or 0))
+    return "_intro.mp4"
+
 
 def visual_width(s):
     return sum(0.5 if ord(ch) < 0x2E80 else 1 for ch in str(s or ""))
@@ -668,6 +789,13 @@ def cmd_compose(args):
 
         names = [n for n in names if lo <= shot_num(n) <= hi]
 
+    # 片头卡：作为第 1 段参与时长/起点累加，字幕时间轴会自动整体后移 ——
+    # 它不在 plan 里，没有台词，所以不产生任何字幕。
+    if args.intro:
+        card = make_intro(pid, args.intro_seconds)
+        if card:
+            names = [card] + names
+
     dur = []
     for nm in names:
         info = ffprobe_one(os.path.join(d, nm))
@@ -728,8 +856,14 @@ def cmd_compose(args):
         if sub_filter:
             parts.append("[%s]%s[vsub]" % (vlab, sub_filter))
             vlab = "vsub"
-        cmd += ["-filter_complex", ";".join(parts), "-map", "[%s]" % vlab, "-map", "[%s]" % alab,
-                "-af", af] + venc + aenc + ["-movflags", "+faststart", target]
+        # 响度归一必须**并进滤镜图**：叠化路径的音轨已经过 filter_complex，
+        # 再用 `-af loudnorm` 会撞 "Simple and complex filtering cannot be used
+        # together for the same stream" 直接失败（工作台的 fade 分支就有这个隐患，
+        # 只是它默认走 cut 才没暴露）。
+        parts.append("[%s]%s[aout]" % (alab, af))
+        alab = "aout"
+        cmd += ["-filter_complex", ";".join(parts), "-map", "[%s]" % vlab, "-map", "[%s]" % alab] \
+            + venc + aenc + ["-movflags", "+faststart", target]
 
     print("合成 %d 镜 · 转场 %s · 字幕 %d 条（字号 %dpx / 每行最多 %d 全角字）"
           % (len(names), transition, built[1], built[2], built[3]), flush=True)
@@ -845,6 +979,7 @@ def main():
     r = sub.add_parser("render", help="调 manju.py 渲染")
     r.add_argument("--project", required=True)
     r.add_argument("--force", action="store_true")
+    r.add_argument("--only", nargs="*", help="只重渲这些镜头 id（单镜返修，隐含 --force）")
     r.set_defaults(func=cmd_render)
 
     q = sub.add_parser("qc", help="机械质检")
@@ -857,6 +992,8 @@ def main():
     c.add_argument("--loudness", type=float, default=None)
     c.add_argument("--subtitle-size", dest="subtitle_size", type=float, default=None)
     c.add_argument("--range", nargs=2, type=int, default=None, help="只合成这个镜头区间（调试用）")
+    c.add_argument("--intro", action="store_true", help="加片头卡（片名 + 集名，取自 project.json）")
+    c.add_argument("--intro-seconds", dest="intro_seconds", type=float, default=3.0)
     c.add_argument("--no-subtitles", dest="no_subtitles", action="store_true")
     c.set_defaults(func=cmd_compose)
 
