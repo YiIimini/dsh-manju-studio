@@ -399,6 +399,26 @@ def cmd_assets(args):
             if a.get("image"):
                 have[k + ":" + str(a.get("id"))] = True
 
+    # ── 系列池自播种 ──
+    # 本项目已有的定妆照/场景图，池里没有的登记进池。
+    # 这样对 EP01 跑一次 assets，就把整个系列的"脸"定下来了，后续集直接复用。
+    series = series_id(pid)
+    seeded = 0
+    if series:
+        for k in SERIES_KINDS:
+            for a in assets[k]:
+                if not a or not a.get("image"):
+                    continue
+                src = project_path(pid, str(a["image"]).replace("/", os.sep))
+                if not os.path.isfile(src):
+                    continue
+                if series_find(series, k, {"id": a.get("id"), "name": a.get("name")}) is None:
+                    series_register(series, k, str(a.get("name") or a.get("id") or ""), src,
+                                    {"id": str(a.get("id") or ""), "desc": str(a.get("desc") or "")[:200]})
+                    seeded += 1
+        if seeded:
+            print("系列池「%s」新登记 %d 个资产（跨集复用的脸就从这里来）" % (series, seeded))
+
     todo = []
     for c in (plan.get("characters") or []):
         if not need_char.get(c.get("id")):
@@ -419,6 +439,27 @@ def cmd_assets(args):
 
     if not todo:
         print("资产齐全：方案引用的角色/场景都已有图。")
+        if args.no_cover:
+            return 0
+        return gen_cover(pid, force=args.force_cover)
+
+    # ── 先尽量从系列池复用（这一步完全不需要 ComfyUI）──
+    # 复用是逐字节复制：后续集拿到的就是前一集那张脸。
+    reused = 0
+    if series and not args.force:
+        remain = []
+        for kind, item in todo:
+            if series_pull(pid, series, kind, item, assets):
+                write_json(project_path(pid, "assets.json"), assets)
+                print("    ↺ 复用系列图「%s」（跨集同一张脸）" % (item.get("name") or item.get("id")), flush=True)
+                reused += 1
+                continue
+            remain.append((kind, item))
+        todo = remain
+        if reused:
+            print("从系列池复用 %d 张，仍需生成 %d 张" % (reused, len(todo)))
+    if not todo:
+        print("资产齐备（全部来自系列池）。")
         if args.no_cover:
             return 0
         return gen_cover(pid, force=args.force_cover)
@@ -474,6 +515,10 @@ def cmd_assets(args):
             arr.append(entry)
         write_json(project_path(pid, "assets.json"), assets)
         print("    ✓ " + rel, flush=True)
+        # 新生成的脸同时入池，供后续集逐字节复用
+        if series and kind in SERIES_KINDS:
+            series_register(series, kind, entry["name"], dst,
+                            {"id": entry["id"], "desc": entry["desc"]})
 
     print("\n资产：成功 %d / 失败 %d" % (len(todo) - len(failed), len(failed)))
     for i, e in failed:
@@ -486,6 +531,102 @@ def cmd_assets(args):
 
 
 # ───────────────────────── sync（解析参考图）─────────────────────────
+
+# ───────────────────────── 系列资产池（跨集一致性）─────────────────────────
+#
+# 为什么必须有：**每一集的定妆照如果各自重新生成，脸就会漂**。
+# 单集内部靠 Ref2VA 锁得住脸，但 EP02 是一个新项目、新 seed、看起来"差不多"的另一个人
+# —— 连载剧最致命的穿帮就是这个。
+# 所以定妆照属于**系列**，不属于某一集：项目里写 `"series": "<系列名>"`，
+# 生成时先查系列池，池里有就直接复制进来（逐字节同一张脸），池里没有才生成，生成后入池。
+# 池是权威、先到先得：后一集永远不许覆盖前一集已经定下来的脸。
+SERIES_DIRNAME = "_series"
+SERIES_KINDS = ("characters", "scenes", "props")
+
+
+def series_id(pid):
+    meta = read_json(project_path(pid, "project.json"), {})
+    return str(meta.get("series") or "").strip()
+
+
+def series_dir(series):
+    return os.path.join(ROOT, SERIES_DIRNAME, series) if series else ""
+
+
+def series_assets(series):
+    if not series:
+        return {k: [] for k in SERIES_KINDS}
+    d = read_json(os.path.join(series_dir(series), "assets.json"), {k: [] for k in SERIES_KINDS})
+    for k in SERIES_KINDS:
+        d.setdefault(k, [])
+    return d
+
+
+def series_find(series, kind, item):
+    """在系列池里按 id 或 name 找已有条目（两者都认：不同集可能只带名字）。"""
+    want_id = str(item.get("id") or "")
+    want_name = str(item.get("name") or "")
+    for a in (series_assets(series).get(kind) or []):
+        if not a or not a.get("image"):
+            continue
+        if want_id and str(a.get("id")) == want_id:
+            return a
+        if want_name and str(a.get("name")) == want_name:
+            return a
+    return None
+
+
+def series_register(series, kind, name, src_abs, extra=None):
+    """把一个定妆照/场景图登记进系列池。**已存在则不覆盖**（池是权威，先到先得）。"""
+    if not series:
+        return None
+    d = series_assets(series)
+    for a in d[kind]:
+        if a and (a.get("name") and a.get("name") == name):
+            return a
+    base = os.path.basename(src_abs)
+    dst = os.path.join(series_dir(series), "img", base)
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    shutil.copyfile(src_abs, dst)
+    entry = {"name": name, "image": "img/" + base}
+    if extra:
+        entry.update(extra)
+    d[kind].append(entry)
+    write_json(os.path.join(series_dir(series), "assets.json"), d)
+    return entry
+
+
+def series_pull(pid, series, kind, item, assets):
+    """
+    把系列池里的条目复制进本项目并登记（返回 True 表示真的用上了池里的脸）。
+    复制而不是引用：/manju-file 只允许项目内的相对路径，引项目外的文件界面就看不见图。
+    """
+    hit = series_find(series, kind, item)
+    if not hit:
+        return False
+    src = os.path.join(series_dir(series), str(hit["image"]).replace("/", os.sep))
+    if not os.path.isfile(src):
+        return False
+    base = os.path.basename(src)
+    rel = "assets/img/" + base
+    dst = project_path(pid, rel.replace("/", os.sep))
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    shutil.copyfile(src, dst)
+    entry = {
+        "id": str(item.get("id") or ""),
+        "name": str(item.get("name") or ""),
+        "desc": str(item.get("description") or "")[:200],
+        "image": rel,
+        "fromSeries": series,
+    }
+    arr = assets.setdefault(kind, [])
+    for i, a in enumerate(arr):
+        if a and str(a.get("id")) == entry["id"]:
+            arr[i] = dict(a, **entry)
+            return True
+    arr.append(entry)
+    return True
+
 
 def resolve_refs(pid, shot, name_of):
     """参考图顺序 = 契约：角色按出场顺序在前，场景永远最后。"""
