@@ -51,6 +51,14 @@ import urllib.request
 ROOT = r"D:\Ai\漫剧"
 COMFY = "http://127.0.0.1:8199"
 COMFY_OUTPUT = r"D:\Ai\ComfyUI\ComfyUI\output"
+COMFY_DIR = r"D:\Ai\ComfyUI\ComfyUI"
+COMFY_LOGDIR = r"D:\Ai\ComfyUI\logs"
+# 资源治理参数：与工作台的 COMFY_FLAGS、start-comfyui.cmd 三处保持一致。
+# 不带它们的后果是实测过的：空转 26 GB 内存 + 21.9 GB 显存不放（GPU 利用率 5%）。
+#   --cache-none            不缓存节点产物
+#   --disable-smart-memory  用不到就卸载，不跟别的程序抢显存
+#   --vram-headroom 1.5     连别的程序占掉的显存也算进余量
+COMFY_GOVERNANCE_FLAGS = ["--cache-none", "--disable-smart-memory", "--vram-headroom", "1.5"]
 PY_EXE = r"D:\Ai\ComfyUI\standalone-env\python.exe"
 MANJU_PY = r"C:\Users\Administrator\.dsh\skills\manju-render\scripts\manju.py"
 FFMPEG = shutil.which("ffmpeg") or "ffmpeg"
@@ -156,6 +164,61 @@ def comfy_alive(url=COMFY):
         return True
     except Exception:
         return False
+
+
+def comfy_url_of(pid):
+    _meta, params = params_of(pid)
+    return str(params.get("comfyUrl") or COMFY).rstrip("/")
+
+
+def comfy_free(url=COMFY):
+    """POST /free —— 卸载模型并释放缓存。实测显存 21.9 GB → 0.99 GB（HTTP 200）。"""
+    try:
+        body = json.dumps({"unload_models": True, "free_memory": True}).encode("utf-8")
+        req = urllib.request.Request(url + "/free", data=body, method="POST")
+        req.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return {"ok": True, "status": resp.status}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def comfy_vram(url=COMFY):
+    try:
+        st = _get(url + "/system_stats", timeout=10)
+        dev = (st.get("devices") or [{}])[0]
+        return {
+            "name": dev.get("name"),
+            "totalMB": round((dev.get("vram_total") or 0) / 2 ** 20),
+            "usedMB": round(((dev.get("vram_total") or 0) - (dev.get("vram_free") or 0)) / 2 ** 20),
+            "freeMB": round((dev.get("vram_free") or 0) / 2 ** 20),
+        }
+    except Exception:
+        return None
+
+
+def comfy_pids():
+    """按命令行找 ComfyUI 主进程 —— 比按端口找更稳（端口可能被别的进程占）。"""
+    code, out, _err = run(["powershell", "-NoProfile", "-Command",
+                           "Get-CimInstance Win32_Process -Filter \"Name='python.exe'\" | "
+                           "Where-Object { $_.CommandLine -match 'ComfyUI' -and $_.CommandLine -match 'main\\.py' } | "
+                           "ForEach-Object { $_.ProcessId }"], timeout=60)
+    pids = []
+    for tok in (out or "").split():
+        tok = tok.strip()
+        if tok.isdigit():
+            pids.append(int(tok))
+    return pids
+
+
+def comfy_rss_gb():
+    code, out, _err = run(["powershell", "-NoProfile", "-Command",
+                           "(Get-Process python -ErrorAction SilentlyContinue | "
+                           "Measure-Object -Property WorkingSet64 -Sum).Sum"], timeout=30)
+    try:
+        return round(float((out or "0").strip()) / 2 ** 30, 2)
+    except Exception:
+        return 0.0
 
 
 def build_image_graph(prompt, width, height, seed):
@@ -441,9 +504,12 @@ def cmd_render(args):
         rj = project_path(pid, "_render_fix.json")
         write_json(rj, doc)
         print("单镜返修：%s" % "、".join(s["id"] for s in keep), flush=True)
+    # --out 可把产物写到别的目录：做 A/B 对比（例如换启动参数重渲同一镜）时
+    # 不该覆盖已定稿的成片素材。
+    outdir = args.out or project_path(pid)
     env = dict(os.environ)
     env.update({"PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"})
-    cmd = [PY_EXE, "-X", "utf8", MANJU_PY, "render", "--shots", rj, "--out", project_path(pid)]
+    cmd = [PY_EXE, "-X", "utf8", MANJU_PY, "render", "--shots", rj, "--out", outdir]
     if args.force or only:
         cmd.append("--force")
     print("渲染器：" + " ".join(cmd), flush=True)
@@ -453,7 +519,15 @@ def cmd_render(args):
     for line in p.stdout:
         sys.stdout.write(line)
         sys.stdout.flush()
-    return p.wait()
+    code = p.wait()
+    # 渲染完把显存/内存还给系统：空转时 ComfyUI 会一直压着 21.9 GB 显存 + 26 GB 内存不放
+    # （实测 /free 后 21.9 GB → 0.99 GB）。**只在整批结束调**，不是每镜 ——
+    # 每镜之间调会让下一镜重新加载权重，白白多花几十秒。
+    if code == 0 and not args.no_free:
+        url = comfy_url_of(pid)
+        r = comfy_free(url)
+        print("\n[free] 归还 ComfyUI 显存/内存：" + ("HTTP %s" % r.get("status") if r.get("ok") else str(r.get("error"))))
+    return code
 
 
 # ───────────────────────── qc ─────────────────────────
@@ -942,6 +1016,9 @@ def cmd_build(args):
         elif len(text) < 40:
             short.append(str(s.get("id")))
         one["h3_prompt"] = text
+        # **同时写 `prompt`**：渲染器只认 `prompt`，而工作台界面上的「渲染」按钮
+        # 直接吃 shots.json。只写 h3_prompt 的话，点那个按钮会 15 镜全报"没有 prompt"。
+        one["prompt"] = text
         plan["shots"].append(one)
     write_json(project_path(pid, "plan.json"), plan)
     print("plan.json 已生成：%d 角色 / %d 场景 / %d 镜"
@@ -955,6 +1032,148 @@ def cmd_build(args):
     if short:
         print("⚠ 提示词过短的镜头：" + "、".join(short))
     return 0 if not (missing or short) else 1
+
+
+def cmd_comfy(args):
+    """
+    ComfyUI 的资源治理：status / free / stop / start。
+
+    为什么要做成子命令：空转的 ComfyUI 实测压着 26 GB 内存 + 21.9 GB 显存不放
+    （GPU 利用率 5%），而 /free 能把显存打回 0.99 GB。这类"看一眼、放一放"的操作，
+    Agent 应该能一条命令做完，而不是去猜进程号。
+    """
+    pid = getattr(args, "project", "") or ""
+    url = comfy_url_of(pid) if pid and os.path.isdir(project_path(pid)) else COMFY
+    act = args.action
+
+    if act == "status":
+        up = comfy_alive(url)
+        print("ComfyUI：%s（%s）" % ("在线" if up else "离线", url))
+        v = comfy_vram(url) if up else None
+        if v:
+            print("  显存 已用 %dMB / %dMB（余 %dMB）" % (v["usedMB"], v["totalMB"], v["freeMB"]))
+        print("  python 进程 RSS 合计 %.2f GB" % comfy_rss_gb())
+        pids = comfy_pids()
+        print("  主进程 PID：" + (",".join(str(x) for x in pids) if pids else "无"))
+        return 0
+
+    if act == "free":
+        if not comfy_alive(url):
+            print("ComfyUI 不在线，无需释放")
+            return 0
+        before = comfy_vram(url) or {}
+        r = comfy_free(url)
+        time.sleep(1.5)
+        after = comfy_vram(url) or {}
+        if not r.get("ok"):
+            print("释放失败：" + str(r.get("error")))
+            return 1
+        print("已归还：显存 %sMB → %sMB，进程 RSS 合计 %.2f GB"
+              % (before.get("usedMB"), after.get("usedMB"), comfy_rss_gb()))
+        return 0
+
+    if act == "stop":
+        pids = comfy_pids()
+        if not pids:
+            print("没有在跑的 ComfyUI 进程")
+            return 0
+        for p in pids:
+            run(["taskkill", "/PID", str(p), "/T", "/F"], timeout=60)
+        time.sleep(3)
+        left = comfy_pids()
+        print("已停止 PID %s；剩余 %s" % (",".join(str(x) for x in pids),
+                                      ",".join(str(x) for x in left) if left else "无"))
+        print("  python 进程 RSS 合计 %.2f GB" % comfy_rss_gb())
+        return 0 if not left else 1
+
+    if act == "start":
+        if comfy_alive(url):
+            print("已在运行：" + url)
+            return 0
+        port = "8199"
+        m = re.search(r":(\d+)", url)
+        if m:
+            port = m.group(1)
+        os.makedirs(COMFY_LOGDIR, exist_ok=True)
+        fo = open(os.path.join(COMFY_LOGDIR, "comfy-headless.out.log"), "w", encoding="utf-8")
+        fe = open(os.path.join(COMFY_LOGDIR, "comfy-headless.err.log"), "w", encoding="utf-8")
+        env = dict(os.environ)
+        env.update({"PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"})
+        argv = [PY_EXE, "main.py", "--port", port, "--listen", "127.0.0.1"] + COMFY_GOVERNANCE_FLAGS
+        print("启动：" + " ".join(argv))
+        subprocess.Popen(argv, cwd=COMFY_DIR, env=env, stdout=fo, stderr=fe,
+                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        t0 = time.time()
+        while time.time() - t0 < 240:
+            if comfy_alive(url):
+                v = comfy_vram(url) or {}
+                print("就绪，用时 %ds；显存余 %sMB" % (int(time.time() - t0), v.get("freeMB")))
+                return 0
+            time.sleep(4)
+        print("启动超时，看日志：" + os.path.join(COMFY_LOGDIR, "comfy-headless.err.log"))
+        return 1
+
+    raise SystemExit("未知动作：" + act)
+
+
+def cmd_logs(args):
+    """列出/查看已落盘的任务日志（渲染、质检、合成、管线）。"""
+    pid = args.project
+    need_project(pid)
+    logdir = project_path(pid, "output", "logs")
+    if not os.path.isdir(logdir):
+        print("还没有日志（渲染/质检/合成跑完会自动写入 output/logs）")
+        return 0
+    files = []
+    for name in os.listdir(logdir):
+        if not name.lower().endswith(".log"):
+            continue
+        st = os.stat(os.path.join(logdir, name))
+        files.append((st.st_mtime, name, st.st_size))
+    files.sort(reverse=True)
+    if not files:
+        print("还没有日志")
+        return 0
+    print("共 %d 份日志（新 → 旧）：" % len(files))
+    for mt, name, size in files[:20]:
+        print("  %-32s %7.1f KB  %s" % (name, size / 1024, time.strftime("%m-%d %H:%M:%S", time.localtime(mt))))
+    target = args.name or files[0][1]
+    path = os.path.join(logdir, target)
+    if not os.path.isfile(path):
+        print("找不到日志：" + target)
+        return 1
+    print("\n===== %s（尾部 %d 行）=====" % (target, args.tail))
+    with open(path, "r", encoding="utf-8", errors="replace") as fh:
+        lines = fh.readlines()
+    for line in lines[-args.tail:]:
+        sys.stdout.write(line if line.endswith("\n") else line + "\n")
+    return 0
+
+
+class _Tee(object):
+    """把 stdout 同时写到终端和日志文件。"""
+
+    def __init__(self, stream, fh):
+        self.stream = stream
+        self.fh = fh
+
+    def write(self, s):
+        try:
+            self.stream.write(s)
+        except Exception:
+            pass
+        try:
+            self.fh.write(s)
+        except Exception:
+            pass
+        return len(s) if s else 0
+
+    def flush(self):
+        for t in (self.stream, self.fh):
+            try:
+                t.flush()
+            except Exception:
+                pass
 
 
 def main():
@@ -980,6 +1199,8 @@ def main():
     r.add_argument("--project", required=True)
     r.add_argument("--force", action="store_true")
     r.add_argument("--only", nargs="*", help="只重渲这些镜头 id（单镜返修，隐含 --force）")
+    r.add_argument("--out", default=None, help="产物目录（默认项目目录；A/B 对比时指向别处）")
+    r.add_argument("--no-free", dest="no_free", action="store_true", help="渲染后不归还 ComfyUI 显存")
     r.set_defaults(func=cmd_render)
 
     q = sub.add_parser("qc", help="机械质检")
@@ -1001,8 +1222,50 @@ def main():
     st.add_argument("--project", required=True)
     st.set_defaults(func=cmd_status)
 
+    cf = sub.add_parser("comfy", help="ComfyUI 资源治理（status/free/stop/start）")
+    cf.add_argument("action", choices=["status", "free", "stop", "start"])
+    cf.add_argument("--project", default="")
+    cf.set_defaults(func=cmd_comfy)
+
+    lg = sub.add_parser("logs", help="列出/查看已落盘的任务日志")
+    lg.add_argument("--project", required=True)
+    lg.add_argument("--name", default="", help="指定日志文件名（缺省看最新一份）")
+    lg.add_argument("--tail", type=int, default=60)
+    lg.set_defaults(func=cmd_logs)
+
     args = ap.parse_args()
-    return args.func(args) or 0
+    # 每个子命令的输出都落一份到 <项目>/output/logs/：
+    # 渲染为什么慢、质检报了哪一条，都是事后才要查的东西，
+    # 只留在终端里等于没有。logs 命令自己不再落盘（否则看日志会生成日志）。
+    raw_out = sys.stdout
+    raw_err = sys.stderr
+    logf = None
+    jp = getattr(args, "project", "") or ""
+    if args.cmd != "logs" and jp and os.path.isdir(project_path(jp)):
+        try:
+            logdir = project_path(jp, "output", "logs")
+            os.makedirs(logdir, exist_ok=True)
+            stamp = time.strftime("%Y-%m-%dT%H-%M-%S")
+            logpath = os.path.join(logdir, "%s-%s.log" % (args.cmd, stamp))
+            logf = open(logpath, "w", encoding="utf-8")
+            sys.stdout = _Tee(raw_out, logf)
+            sys.stderr = _Tee(raw_err, logf)
+        except Exception:
+            logf = None
+    code = 0
+    try:
+        code = args.func(args) or 0
+    finally:
+        if logf:
+            try:
+                sys.stdout.flush()
+                logf.close()
+            except Exception:
+                pass
+            sys.stdout = raw_out
+            sys.stderr = raw_err
+            raw_out.write("[log] 已落盘：" + logpath + "\n")
+    return code
 
 
 if __name__ == "__main__":

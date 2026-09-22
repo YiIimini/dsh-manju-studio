@@ -69,11 +69,17 @@ const SUITES = [
   ['小说库/预检', 'manju-lib-itest.mjs', null],
   ['加速机制表', 'accel-probe.mjs', null],
   ['accel 迁移', 'normaccel.mjs', null],
+  // 媒体接口契约：ETag/304 + Range/206 + HEAD + 路径穿越。
+  // 这条套件是"封面一闪一闪"与"错误响应挂死"两个事故的回归闸门，放在仓库里而不是临时目录。
+  ['媒体接口缓存/Range', 'manju-file-test.mjs', null],
+  ['UI 结构与契约', 'manju-ui-test.mjs', null],
   ['状态扫描', 'sweep-blank.mjs', 'yaolu-yeyu'],
 ]
 let ran = 0
 for (const [name, file, arg] of SUITES) {
-  const abs = path.join(TMP, file)
+  // 仓库 tools/ 优先，其次才是临时目录（历史套件都在 %TEMP% 里躺着）
+  const inRepo = path.join(PLUGIN, 'tools', file)
+  const abs = fs.existsSync(inRepo) ? inRepo : path.join(TMP, file)
   if (!fs.existsSync(abs)) { line('  – ' + name + '（未找到 ' + file + '，跳过）'); continue }
   ran += 1
   const args = [abs].concat(arg ? [arg] : [])
