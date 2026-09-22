@@ -210,5 +210,18 @@ ok(has(py, 'def ensure_mandarin('), '驱动器有普通话锁')
 ok(has(py, 'one["prompt"] = ensure_mandarin('), 'sync 写 prompt 时过普通话锁')
 ok(has(py, 'MANDARIN ONLY (mandatory language rule)'), '锁的文案与工作台一致')
 
+console.log('== 系列资产池（多集同一张脸）==')
+// 单集内靠 Ref2VA 锁脸；跨集若各自重新生成，脸必漂 —— 这是连载剧最致命的穿帮
+ok(has(py, 'SERIES_DIRNAME = "_series"'), '系列池目录约定')
+ok(has(py, 'def series_id('), '项目用 series 字段归入系列')
+ok(has(py, 'def series_find('), '池内按 id/name 查已有条目')
+ok(has(py, 'def series_pull('), '复用：把池里的图复制进本项目')
+ok(has(py, 'def series_register('), '生成后自动入池')
+ok(has(py, 'shutil.copyfile(src, dst)') && has(py, '"fromSeries": series'), '复用是**逐字节复制**（引用会让界面看不见图）')
+ok(/for a in d\[kind\][\s\S]{0,160}return a/.test(py), '池是权威、先到先得（已存在就不覆盖）')
+ok(has(py, 'fromSeries'), '登记时标记来源集')
+ok(has(py, 'series_pull(pid, series, kind, item, assets)'), '生成前先尝试从池复用')
+ok(/if reused:\s*\n\s*print/.test(py) || has(py, '从系列池复用'), '复用数量可观测')
+
 console.log('\n结果：PASS=' + pass + ' FAIL=' + fail)
 process.exit(fail ? 1 : 0)
