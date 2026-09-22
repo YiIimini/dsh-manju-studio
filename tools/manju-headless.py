@@ -113,26 +113,30 @@ def cover_brief(meta, params, plan=None):
         parts.append("Genre: " + genre + ".")
     if syn:
         parts.append("Story premise: " + syn)
-    # 取作品自己的场景做取景对象（最多两个，避免拼贴感）
+    # 取作品自己的场景做取景对象 —— **只取一个**。
+    # 实测教训：给两个场景，模型会画出**四宫格拼贴**（一眼就是"用模板套的"），
+    # 明确写 no collage 也压不住。封面必须是"一张照片"，所以只喂一个场景。
     scenes = []
-    for s in ((plan or {}).get("scenes") or [])[:2]:
+    for s in ((plan or {}).get("scenes") or [])[:1]:
         d = str(s.get("description") or "").strip()
         if d:
             scenes.append(d)
     if scenes:
-        parts.append("SETTING — drawn from this series' own scene design: " + " / ".join(scenes))
+        parts.append("SETTING — drawn from this series' own scene design: " + scenes[0])
     if custom:
         parts.append("Additional art direction: " + custom)
-    parts.append("COMPOSITION: environment-first wide shot that captures the mood of the whole episode — a strong sense "
-                 "of place, dramatic light and atmosphere, deep depth staging, clear silhouette and colour separation, "
-                 "rich incidental detail. A small distant figure may appear only for scale, seen from behind or as an "
-                 "unlit silhouette, never showing a readable face. Leave the upper third calm and uncluttered so an "
-                 "episode title can be overlaid later.")
-    parts.append("MUST NOT: no character portrait, no close-up face, no front-facing bust, no cast line-up, no beauty "
-                 "close-up, no collage, no split screen, no market street, no shop fronts, no hanging signboards, "
-                 "no plaques, no banners, no scrolls, no text, no lettering, no calligraphy, no glyphs, no symbols "
-                 "that look like writing, no logo, no watermark, no border, no UI."
-                 " The image must read as a film poster of a PLACE and a MOMENT, not as a portrait of a person.")
+    parts.append("COMPOSITION: ONE single continuous photographic frame — a single environment-first wide shot that "
+                 "captures the mood of the whole episode — a strong sense of place, dramatic light and atmosphere, deep "
+                 "depth staging, clear silhouette and colour separation, rich incidental detail. A small distant figure "
+                 "may appear only for scale, seen from behind or as an unlit silhouette, never showing a readable face. "
+                 "Leave the upper third calm and uncluttered so an episode title can be overlaid later.")
+    parts.append("MUST NOT: no collage, no split screen, no panels, no insets, no divided sections, no borders, no frames "
+                 "within frames, no multiple views of different places, no character portrait, no close-up face, no "
+                 "front-facing bust, no cast line-up, no beauty close-up, no market street, no shop fronts, no hanging "
+                 "signboards, no plaques, no banners, no scrolls, no text, no lettering, no calligraphy, no glyphs, no "
+                 "symbols that look like writing, no logo, no watermark, no UI."
+                 " The image must read as the poster of a PLACE and a MOMENT, not as a portrait of a person and not as "
+                 "a set of thumbnails.")
     if style:
         parts.append("RENDER STYLE (surface only, never changes features): " + style)
     return "\n\n".join(parts)
@@ -553,7 +557,7 @@ def cmd_sync(args):
         one = dict(s)
         # 字段名转换是渲染器契约的一部分：方案里叫 h3_prompt（工作台/方案阶段的写法），
         # manju.py 只认 `prompt`。漏了这一步 15 个镜头会全部在 0 秒内报"没有 prompt"。
-        one["prompt"] = s.get("h3_prompt") or s.get("prompt") or ""
+        one["prompt"] = ensure_mandarin(s.get("h3_prompt") or s.get("prompt") or "")
         refs, missing = resolve_refs(pid, s, name_of)
         one.pop("characters", None)
         one.pop("scene", None)
@@ -620,6 +624,27 @@ def cmd_sync(args):
 
 
 # ───────────────────────── render ─────────────────────────
+
+def ensure_mandarin(text):
+    """
+    给中文台词补上"只说普通话"的硬锁（与工作台 ensureChineseDialogue 同口径）。
+
+    为什么要有：H3 靠 ``<d>`` 里的语言标记决定说什么语言，标记在就一定说中文；
+    但工作台还会额外追一段 MANDARIN ONLY 约束，用来压住口音与即兴外语。
+    我的驱动器原来直写提示词、绕过了这道保险 —— 现在补齐，两边口径一致。
+    幂等：已经有 MANDARIN ONLY 就原样返回。
+    """
+    s = str(text or "")
+    if "<d>" not in s:
+        return s
+    if "MANDARIN ONLY" in s:
+        return s
+    return s + "\n\n" + (
+        "MANDARIN ONLY (mandatory language rule): every spoken line and voiceover MUST be Mandarin Chinese (普通话), "
+        "matching the [Chinese] tag inside each <d>…</d>; no English, no Japanese, no invented or gibberish speech, "
+        "no foreign accent. Ambient non-speech sound only where the soundscape asks for it."
+    )
+
 
 def dry_run_graphs(rj, pid):
     """

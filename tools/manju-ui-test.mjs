@@ -196,5 +196,19 @@ ok(has(host, 'SETTING — drawn from this series'), '宿主同样取材于作品
 ok(!/coverBrief[\s\S]{0,900}for the episode "/.test(host), '封面提示词不写片名（写了模型就会画字）')
 ok(!/cover_brief[\s\S]{0,900}for the episode/.test(py), '驱动器封面提示词同样不写片名')
 
+console.log('== 封面防拼贴 / 普通话锁 ==')
+// 实测教训：给两个场景，模型会画成四宫格拼贴（一眼模板货），光写 no collage 压不住
+ok(has(py, 'single continuous photographic frame'), '驱动器要求"单张连续画面"')
+ok(has(py, 'no panels, no insets, no divided sections'), '明确禁止分格/内嵌/切块')
+ok(has(py, 'no multiple views of different places'), '明确禁止多视角拼图')
+ok(/for s in \(\(plan or \{\}\)\.get\("scenes"\) or \[\]\)\[:1\]/.test(py), '封面**只取一个场景**（两个必拼贴）')
+ok(has(host, 'no panels, no insets, no divided sections'), '宿主同样禁止分格')
+ok(has(host, 'scenes.length < 1'), '宿主同样只取一个场景')
+// H3 靠 <d> 语言标记决定说什么语言；工作台还会补一段 MANDARIN ONLY 压口音与即兴外语，
+// 驱动器原来直写提示词绕过了它 —— 口径必须一致
+ok(has(py, 'def ensure_mandarin('), '驱动器有普通话锁')
+ok(has(py, 'one["prompt"] = ensure_mandarin('), 'sync 写 prompt 时过普通话锁')
+ok(has(py, 'MANDARIN ONLY (mandatory language rule)'), '锁的文案与工作台一致')
+
 console.log('\n结果：PASS=' + pass + ' FAIL=' + fail)
 process.exit(fail ? 1 : 0)
