@@ -1,0 +1,12 @@
+# dsh-manju-studio bundle patch: 把「漫剧工作台」这一行插入 desktop profile 的插件名册。
+# 作为 profile bundle 层（package.json 的 `dsh.bundle.patch` 字段）叠加在 dsh-base 之上。
+# 激活方式：dsh plugin --profile desktop add dsh-manju-studio
+#
+# 这一行是一个「双面插件」：
+#   * Host 半 —— main 指向的 lib/index.js 在宿主进程里跑（/api/manju-studio 路由、
+#     文件读写、调用 manju.cmd 渲染）。
+#   * Client 半 —— package.json 的 `dsh.client` 声明让浏览器半（exports "./client"，
+#     服务在 /plugins/dsh-manju-studio/client.js）在 Web GUI 中加载。
+- insert:
+    - id: manju-studio
+      name: 'dsh-manju-studio'

@@ -1,0 +1,6 @@
+# 缓存与产物
+node_modules/
+*.log
+_posters/
+.DS_Store
+Thumbs.db
