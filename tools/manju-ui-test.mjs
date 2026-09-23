@@ -259,5 +259,22 @@ ok(has(py, 'def _asr_segments('), '按 ASR 分段比对（一句话被切成两�
 ok(has(py, 'def _best_sim('), '相似度而非全等（同音字必错）')
 ok(has(py, 'if len(want) > 3 else min(float(args.min_sim), 0.5)'), '超短台词单独放宽（2 字行同音即 0.5，是度量局限）')
 
+console.log('== 故事板：封面闪烁根治 + 按集分组 + 排序 ==')
+// 闪烁根因：组件定义在 Studio 内部 → 每次重绘都是新组件类型 → React 卸载重建所有卡片 → 封面重新加载
+const iCard = cli.indexOf('const ShotCard = React.memo(')
+const iStudio = cli.indexOf('function Studio(')
+ok(iCard > 0 && iStudio > 0 && iCard < iStudio,
+  'ShotCard 定义在 Studio **之前**（模块级）—— 定义在内部会让卡片每次重绘都卸载重建（封面闪烁）',
+  'ShotCard@' + iCard + ' Studio@' + iStudio)
+ok(!/\.mj-boardgrid\{[^}]*overflow:auto/.test(cli), '分组后滚动只在最外层（网格自带 overflow 会变成每组各滚一遍）')
+ok(has(cli, '.mj-boardscroll{flex:1 1 auto;min-height:0;overflow:auto'), '外层单一滚动容器')
+ok(has(cli, 'episode: String(s.episode || "")'), '故事板行数据带集号')
+ok(has(cli, '.mj-epgroup') && has(cli, '.mj-ephead'), '按集分组（每组一个表头）')
+ok(has(cli, 'const [shotSort, setShotSort] = React.useState("asc")'), '故事板有排序状态')
+ok(has(cli, '"镜号 \\u2191"') && has(cli, '"状态"'), '排序可选：镜号↑ / 镜号↓ / 状态')
+ok(/const \[shotSort, setShotSort\][\s\S]{0,200}$/.test(cli.slice(0, cli.indexOf('function Studio(')))
+  || cli.indexOf('const [shotSort, setShotSort]') > cli.indexOf('const [playerFor, setPlayerFor]'),
+  '新状态追加在状态清单末尾（索引注入的套件要求）')
+
 console.log('\n结果：PASS=' + pass + ' FAIL=' + fail)
 process.exit(fail ? 1 : 0)
