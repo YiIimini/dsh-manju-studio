@@ -460,7 +460,14 @@ llmReply = '```json\n' + JSON.stringify({
     {
       id: 's01', mode: 'ref2va', shot_size: '近景', camera: 'Push In, small amplitude, slow',
       characters: ['c1'], scene: 's1', length: 999, seed: 11,
-      dialogue: [{ speaker: '林小满', text: '师兄，药好了。' }],
+      dialogue: [
+        { speaker: '林小满', text: '师兄，药好了。' },
+        // 字幕卡：这三条用来锁"kind 不会被方案落地吃掉"，以及未知值会被白名单丢掉。
+        { speaker: '', text: '【系统】剩余时间 -3 天', kind: 'sys' },
+        { speaker: '', text: '这药怕不是要凉', kind: 'system' },     // 别名 → 归一为 sys
+        { speaker: '', text: '轰', kind: 'sfx' },
+        { speaker: '', text: '随便编的类型', kind: '收卡' },          // 未知 → 丢弃，退回普通台词
+      ],
       h3_prompt: 'subject_definitions:\n<Subject 1> is Lin Xiaoman, a seventeen-year-old girl in blue robes.\n\n'
         + 'retention_analysis:\n<Picture 1> fully_preserved - FACE LOCK on her own picture.\n\n'
         + 'detailed_description:\nCINEMATIC 2.5D ANIME. [Shot 1] She turns toward the camera.\n'
@@ -526,6 +533,16 @@ ok(gen.shots[0].prompt.indexOf('MANDARIN ONLY') >= 0, '有台词的镜头追加�
 ok(gen.shots[1].prompt.indexOf('<d>[Chinese]别走。</d>') >= 0, '裸 <d> 台词被补上 [Chinese]')
 ok(gen.shots[1].prompt.indexOf('MANDARIN ONLY') >= 0, '每个有台词的镜头都带语言锁')
 ok(planDoc.characters.length === 2 && planDoc.scenes.length === 1, 'plan.json 保留角色卡与场景卡')
+// 字幕卡的数据通路：normalizeShots 曾经只搬 speaker/text，作者或模型写进去的 kind
+// 会在方案落地时被**静默丢掉** —— 于是"字幕卡"这个能力永远只有渲染器一侧、没有产出方。
+ok((gen.shots[0].dialogue || []).length === 5, '五句台词都留下来了（含三条字幕卡）')
+ok(gen.shots[0].dialogue[1].kind === 'sys' && gen.shots[0].dialogue[2].kind === 'sys',
+  'kind 被保住，且 system 归一为 sys')
+ok(gen.shots[0].dialogue[3].kind === 'sfx', 'sfx 被保住')
+ok(gen.shots[0].dialogue[4].kind === undefined, '未知 kind 被白名单丢掉（退回普通台词，不留在画面上乱放字块）')
+ok(gen.shots[0].dialogue[0].kind === undefined, '普通台词不带 kind（不会误判成字幕卡）')
+ok(sent.system.indexOf('danmaku') >= 0 && sent.system.indexOf('sfx') >= 0 && sent.system.indexOf('0–2 条') >= 0,
+  '方案提示词给出字幕卡产出规则（克制使用，不是每镜都加）')
 ok(/^[A-Za-z0-9_-]{1,40}$/.test(planDoc.characters[1].id), '非法角色 id 被改写为 ' + planDoc.characters[1].id)
 ok(files[SHOTS_PATH + '.bak'] === before, '原 shots.json 已备份为 .bak')
 

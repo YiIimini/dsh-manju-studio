@@ -228,7 +228,8 @@ console.log('== 字幕淡入（KB 漫剧字幕规则）==')
 ok(has(py, 'fade_ms=140'), '驱动器 build_ass 有淡入参数（140ms）')
 ok(has(py, '{\\\\fad('), '驱动器字幕写入 \\fad 标签')
 ok(has(host, 'const fadeMs = o.subtitleFadeMs === undefined ? 140'), '宿主 buildAss 有淡入默认值')
-ok(has(host, '+ (fadeMs ? \'{\\\\fad(\' + fadeMs'), '宿主字幕写入 \\fad 标签')
+ok(has(host, "(fadeMs ? '{\\\\fad(' + fadeMs") && has(host, 'wrapAssText(label + txt, maxUnits)'),
+  '宿主字幕写入 \\fad 标签（普通台词走这条；字幕卡的淡入由 assCard 自带）')
 ok(has(py, 'def series_find(') && has(py, 'def series_pull('), '系列池函数齐备（跨集同一张脸）')
 
 console.log('== 项目内分集 / 语音验收 / 列表排版 ==')
@@ -341,6 +342,24 @@ ok(has(cli, '留空 = 自动排下一集'), '集号可留空（由宿主自动�
 ok(has(cli, 'scope: { kind: f.kind, vol: f.vol, chapter: f.chapter, count: f.count }'), '范围选择原样传给宿主')
 ok(/const \[shotSort, setShotSort\][\s\S]{0,400}const \[nRoot, setNRoot\]/.test(cli),
   '小说管理的新状态追加在状态清单末尾（索引注入的套件要求）')
+
+console.log('== 字幕卡：数据通路 + 两半同口径 ==')
+// 用户 2026-09-23：那三件"顺带查出来没动的"之一 —— 字幕卡只有渲染器在消费 kind，
+// 数据侧没有产出方。根因其实在数据通路：normalizeShots 只搬 speaker/text，
+// 模型或作者写进去的 kind 在方案落地时就被**静默丢掉**了。
+ok(has(host, 'function normCardKind('), '字幕卡类型白名单（未知值退回普通对白，不在画面上乱放字块）')
+ok(has(host, 'if (kind) one.kind = kind'), 'normalizeShots 保住 kind（原先只搬 speaker/text）')
+ok(has(host, 'function assCard('), '宿主侧实现字幕卡（否则界面合成的成片里永远没有卡）')
+ok(has(host, 'danmaku') && has(host, '0–2 条'), '方案提示词给出字幕卡产出规则，且要求克制使用')
+// 两半都出字幕：一处改了另一处没改，就会出现"界面合成的成片和命令行合成的、字幕不一样"。
+ok(has(host, "'系统', '&H60E0D0'") && has(py, '"系统", "&H60E0D0"'), '系统提示样式两半同口径')
+ok(has(host, "'弹幕', '&HA8A8A8'") && has(py, '"弹幕", "&HA8A8A8"'), '弹幕样式两半同口径')
+ok(has(host, "'音效', '&H00FFFFFF'") && has(py, '"音效", "&H00FFFFFF"'), '音效大字样式两半同口径')
+ok(has(host, '\\\\an7\\\\pos(') && has(py, '\\\\an7\\\\pos('), '系统提示定位两半一致（左上 \\an7）')
+ok(has(host, '\\\\an8\\\\pos(') && has(py, '\\\\an8\\\\pos('), '弹幕定位两半一致（顶部居中 \\an8）')
+ok(has(host, '\\\\bord7\\\\3c&H00000000&\\\\fad(60,140)') && has(py, '\\\\bord7\\\\3c&H00000000&\\\\fad(60,140)'),
+  '音效大字的描边与淡出两半一致')
+ok(has(cli, 'function cardKindLabel('), '界面把字幕卡标出来（作者要能看出哪句是卡）')
 
 console.log('\n结果：PASS=' + pass + ' FAIL=' + fail)
 process.exit(fail ? 1 : 0)

@@ -1546,6 +1546,14 @@ def build_ass(shots, starts, width, height, size_pct=5.0, tail_trim=0.0, fade_ms
         "Alignment, MarginL, MarginR, MarginV, Encoding",
         style("对白", "&H00FFFFFF", False),
         style("旁白", "&H00D8E8F5", True),
+        # 字幕卡三类的 Style：**必须在这里定义**。
+        # 引用一个未定义的 Style 名时，libass / VSFilter / mpv 各自回落到不同的样式，
+        # 同一份 ASS 换播放器就换观感。行内标签负责位置与字号，Style 负责字体、描边、
+        # 阴影这些"没被覆盖"的属性 —— 两边分工，缺一边就会漂。
+        # 与工作台 lib/index.js 的 buildAss 保持逐字同口径。
+        style("系统", "&H60E0D0", False),
+        style("弹幕", "&HA8A8A8", False),
+        style("音效", "&H00FFFFFF", False),
         "", "[Events]",
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
     ]
@@ -1597,7 +1605,9 @@ def build_ass(shots, starts, width, height, size_pct=5.0, tail_trim=0.0, fade_ms
                 continue
             lines.append("Dialogue: 0,%s,%s,%s,%s,0,0,0,,%s%s" % (
                 ass_time(t0), ass_time(t1),
-                "系统" if kind in ("sys", "system") else ("弹幕" if kind in ("danmaku", "dm") else ("旁白" if is_narr else "对白")),
+                "系统" if kind in ("sys", "system") else
+                ("弹幕" if kind in ("danmaku", "dm") else
+                 ("音效" if kind in ("sfx", "fx") else ("旁白" if is_narr else "对白"))),
                 name, tag, body))
             n += 1
     return "\n".join(lines), n, size, max_units
