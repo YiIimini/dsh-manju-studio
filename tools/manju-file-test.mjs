@@ -1,11 +1,13 @@
 /**
- * manju-studio /manju-file 路由的契约测试（临时脚本，跑完即可删）
+ * manju-studio /manju-file 路由的契约测试（仓库常驻套件，由 tools\check.cmd 调用）
  *
  * 为什么要真起一个 http server 而不是造假的 req/res：
  * 这次改动动了 304 / 206 / pipe 三件容易"看着对、其实错"的事 ——
  * 假对象会把它们全都掩盖掉。用真服务器 + 真 fetch，才验得到浏览器会看到的行为。
  *
- * 跑法：ELECTRON_RUN_AS_NODE=1 "DSH Desktop.exe" <本文件>
+ * 夹具自带：在作品根下建一个 zz-filetest-* 沙箱项目，跑完（含崩溃）自己清掉。
+ *
+ * 跑法：ELECTRON_RUN_AS_NODE=1 "DSH Desktop.exe" manju-file-test.mjs  （或 tools\check.cmd）
  */
 import http from 'node:http'
 import fs from 'node:fs'
@@ -57,10 +59,27 @@ const srv = http.createServer((req, res) => {
 await new Promise((r) => srv.listen(0, '127.0.0.1', r))
 const base = 'http://127.0.0.1:' + srv.address().port
 
-const PJ = 'jixin-wendao'
-const IMG = 'assets/img/scenes_gen_云海天穹_832028.png'
-const absImg = 'D:\\Ai\\漫剧\\' + PJ + '\\' + IMG.replace(/\//g, '\\')
-const size = (await fsp.stat(absImg)).size
+// ── 夹具：自带沙箱项目，不依赖任何真实作品 ──
+// 这条套件原先固定读 jixin-wendao 的一张素材图与一个 mp4。那个项目一被删，
+// 整条套件就在 stat 处 ENOENT 崩掉：PASS=0 FAIL=0，闸门红着却看不出原因。
+// 契约测试不该和「某个真实作品还在不在」耦合 —— 自己造文件，跑完自己清。
+const ROOT = 'D:\\Ai\\漫剧'
+const PJ = 'zz-filetest-' + Date.now().toString(36)
+const DIR = path.join(ROOT, PJ)
+const IMG = 'assets/img/test.png'
+const absImg = path.join(DIR, 'assets', 'img', 'test.png')
+const absMp4 = path.join(DIR, 's01.mp4')
+// 路由只做字节搬运、不解码图片，夹具用「PNG 签名 + 填充字节」即可（仍是个合法文件头）
+const fixturePng = Buffer.concat([
+  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+  Buffer.alloc(4096, 3),
+])
+await fsp.mkdir(path.dirname(absImg), { recursive: true })
+await fsp.writeFile(absImg, fixturePng)
+await fsp.writeFile(absMp4, Buffer.alloc(4096, 7))
+const size = fixturePng.length
+// 无论断言怎么收场都要把沙箱清掉：崩了也不许在作品根目录留垃圾
+process.on('exit', () => { try { fs.rmSync(DIR, { recursive: true, force: true }) } catch (e) { /* 忽略 */ } })
 
 let pass = 0
 let fail = 0
@@ -109,7 +128,7 @@ console.log('== 3. Range 支持（视频拖进度）==')
 console.log('== 4. mp4 也能走 Range ==')
 {
   const mp4 = 's01.mp4'
-  const ms = (await fsp.stat('D:\\Ai\\漫剧\\' + PJ + '\\' + mp4)).size
+  const ms = (await fsp.stat(absMp4)).size
   const r = await fetch(u(mp4), { headers: { Range: 'bytes=0-1023' } })
   ok(r.status === 206 && (await r.arrayBuffer()).byteLength === 1024, 'mp4 206 + 1024 字节（总 ' + ms + '）')
 }

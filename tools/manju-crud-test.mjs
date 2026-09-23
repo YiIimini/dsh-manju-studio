@@ -98,7 +98,7 @@ console.log('== 2. purge 的安全边界 ==')
   ok(b && !!b.error, '不存在的项目被拒：' + (b && b.error))
   const c = await call('purge', { id: '' })
   ok(c && !!c.error, '空 id 被拒：' + (c && c.error))
-  const d = await call('purge', { id: 'D:/Ai/漫剧/jixin-wendao' })
+  const d = await call('purge', { id: 'D:/Ai/漫剧/zz-path-probe' })
   ok(d && !!d.error, '带路径分隔符的 id 被拒（只接受纯项目名）：' + (d && d.error))
   // 注意：**绝不**在这里对真实项目调用 purge 做"是否拒绝"的探测 ——
   // 万一它没拒绝，删掉的就是真作品。安全边界只用不可能存在的输入来验证。
@@ -121,17 +121,26 @@ console.log('== 3. remove：软删除必须可恢复 ==')
 
 console.log('== 4. 日志命令 ==')
 {
-  const ls = await call('logs.list', { id: 'jixin-wendao' })
+  // 夹具自建：原先固定读 jixin-wendao 的日志，那个项目一被删这条断言就恒红
+  // （"没有日志可读"）—— 但 logs.* 的契约本来就是"读本项目 output/logs 下的 .log"，
+  // 自己造一个项目 + 一份日志就能验，不必依赖任何真实作品是否还在、是否渲过。
+  const logId = 'zz-logtest-' + stamp
+  const dir = await mkProj(logId)
+  await fsp.mkdir(path.join(dir, 'output', 'logs'), { recursive: true })
+  await fsp.writeFile(path.join(dir, 'output', 'logs', 'render-test.log'), 'line1\nline2\n', 'utf8')
+  const ls = await call('logs.list', { id: logId })
   ok(ls && Array.isArray(ls.logs), 'logs.list 返回数组')
   if (ls && ls.logs && ls.logs.length) {
     ok(ls.logs.length >= 1, '至少有一份日志（' + ls.logs.length + ' 份）')
-    const r1 = await call('logs.read', { id: 'jixin-wendao', name: 'output/logs/' + ls.logs[0].name })
+    ok(ls.logs[0].name === 'render-test.log', '按名字列出日志：' + ls.logs[0].name)
+    const r1 = await call('logs.read', { id: logId, name: 'output/logs/' + ls.logs[0].name })
     ok(r1 && typeof r1.text === 'string' && r1.text.length > 0, 'logs.read 能读到正文')
-    const bad = await call('logs.read', { id: 'jixin-wendao', name: 'project.json' })
+    const bad = await call('logs.read', { id: logId, name: 'project.json' })
     ok(bad && !!bad.error, '越界读被拒（只允许 output/logs 下）：' + (bad && bad.error))
   } else {
-    ok(false, '没有日志可读（先跑一次 render/sync 再看）')
+    ok(false, '没有读到日志（夹具已写入 output/logs/render-test.log，说明 logs.list 漏了它）')
   }
+  await fsp.rm(dir, { recursive: true, force: true })
 }
 
 console.log('\n结果：PASS=' + pass + ' FAIL=' + fail)

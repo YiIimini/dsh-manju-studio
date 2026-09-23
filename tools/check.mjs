@@ -11,7 +11,12 @@
  * 检查项：
  *   1. 两个半的**语法闸门**（把文件当模块 import，语法错会立刻暴露）
  *   2. 状态扫描里的**冒烟用例**（真数据渲染，能抓空引用/坏属性）
- *   3. 其它测试套件（存在就跑，不存在跳过）
+ *   3. 其它测试套件（全部住在 tools/，一条命令跑完；按需套件见下方 SUITES 注释）
+ *
+ * 判定口径（2026-09-23 明确）：
+ *   · 套件报 SKIP 且零断言 = 前置条件不足（项目不存在/还没 sync/还没成片），不算失败；
+ *   · 零断言又没有 SKIP = 套件崩了，打印退出码与最后一行输出（避免"红得没原因"）；
+ *   · 套件一律不得依赖某个真实作品是否还在磁盘上 —— 夹具自己造、自己清。
  */
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -61,6 +66,14 @@ try {
 }
 
 // ── 3. 套件（存在的才跑）──
+// 套件分两类：
+//   · 代码闸门套件 —— 红了就是"这次改动把东西改坏了"，必须修；
+//   · 按需套件（带 needsEnv）—— 审的是**某个作品的产物达没达标**，项目半成品时必然红，
+//     而那种红改代码也修不掉。挂在代码闸门上只会制造假警报，所以默认不跑。
+// 两条判定口径：
+//   · SKIP 是"还没做到那一步"（项目不存在 / 还没 sync / 还没成片），不算失败；
+//   · PASS=0 且 FAIL=0 且没有 SKIP = **套件自己崩了**，必须把原因打出来，
+//     否则闸门只会红得莫名其妙（这就是 jixin-wendao 被删那天发生的事）。
 line('【3】测试套件')
 const SUITES = [
   ['单元/组件', 'manju-smoke.mjs', null],
@@ -74,17 +87,21 @@ const SUITES = [
   ['媒体接口缓存/Range', 'manju-file-test.mjs', null],
   ['项目增删/日志', 'manju-crud-test.mjs', null],
   ['UI 结构与契约', 'manju-ui-test.mjs', null],
-  // 发布前自审：按知识库的漫剧规范逐条量产出（字幕单行/淡入/无重叠、17k+5 帧网格、
-  // 台词 ≤20 字、接镜是否用了、成片时长与分辨率）。默认审 tingguiren，项目不存在则跳过。
-  ['发布前自审', 'manju-audit-test.mjs', null],
-  ['状态扫描', 'sweep-blank.mjs', 'yaolu-yeyu'],
+  // 发布前自审：按知识库漫剧规范逐条量产出（字幕单行/淡入/无重叠、17k+5 帧网格、
+  // 台词 ≤20 字、接镜是否用了、成片时长与分辨率）。**按需**跑，见上面说明。
+  ['发布前自审', 'manju-audit-test.mjs', null, { needsEnv: 'MANJU_AUDIT_PROJECT' }],
+  ['状态扫描', 'sweep-blank.mjs', null],
 ]
 let ran = 0
-for (const [name, file, arg] of SUITES) {
-  // 仓库 tools/ 优先，其次才是临时目录（历史套件都在 %TEMP% 里躺着）
+for (const [name, file, arg, opt] of SUITES) {
+  // 仓库 tools/ 优先，其次才是临时目录（历史套件曾在 %TEMP% 里躺着，已经被收编进仓库）
   const inRepo = path.join(PLUGIN, 'tools', file)
   const abs = fs.existsSync(inRepo) ? inRepo : path.join(TMP, file)
   if (!fs.existsSync(abs)) { line('  – ' + name + '（未找到 ' + file + '，跳过）'); continue }
+  if (opt && opt.needsEnv && !String(process.env[opt.needsEnv] || '').trim()) {
+    line('  – ' + name + '（按需套件：设 ' + opt.needsEnv + '=<项目id> 才跑）')
+    continue
+  }
   ran += 1
   const args = [abs].concat(arg ? [arg] : [])
   const r = spawnSync(ELECTRON, args, {
@@ -95,12 +112,21 @@ for (const [name, file, arg] of SUITES) {
   const out = (r.stdout || '') + (r.stderr || '')
   const pass = (out.match(/^\s+(?:PASS|✓) /gm) || []).length
   const fail = (out.match(/^\s+(?:FAIL|✕) /gm) || []).length
-  ok(fail === 0 && pass > 0, name + '  PASS=' + pass + ' FAIL=' + fail)
+  const skips = Number((out.match(/SKIP=(\d+)/) || [])[1] || 0)
+  if (pass === 0 && fail === 0 && skips > 0) {
+    line('  – ' + name + '（前置条件不足，跳过 ' + skips + ' 项）')
+    continue
+  }
+  ok(fail === 0 && pass > 0, name + '  PASS=' + pass + ' FAIL=' + fail + (skips ? ' SKIP=' + skips : ''))
   if (fail) {
     out.split('\n').filter((l) => /^\s+(FAIL|✕) /.test(l)).slice(0, 3).forEach((l) => line('      ' + l.trim()))
+  } else if (pass === 0) {
+    // 崩了：把最后一行真实输出（通常是异常）带出来
+    const why = out.split('\n').map((l) => l.trim()).filter(Boolean).slice(-1)[0] || '(没有任何输出)'
+    line('      套件没产出任何断言（exit=' + r.status + (r.signal ? ' signal=' + r.signal : '') + '）：' + why.slice(0, 180))
   }
 }
-ok(ran > 0 || true, '共跑 ' + ran + ' 个套件')
+line('  · 共跑 ' + ran + ' 个套件')
 
 // ── 4. 渲染器（manju.py）──
 // 加这一段的直接原因：我编辑 manju.py 的 DEFAULTS 时弄丢了 `seed` 键，
