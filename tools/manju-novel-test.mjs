@@ -39,8 +39,47 @@ function ok(cond, msg, extra) {
 const chap = (n, tag) => '# 第' + String(n).padStart(3, '0') + '章 ' + tag + '\n\n' + (tag + '。').repeat(1600)
 const chapName = (n, tag) => '第' + String(n).padStart(3, '0') + '章_' + tag + '.md'
 
+const CFG_BAK = CFG + '.noveltestbak'
+
+/**
+ * 崩溃自愈：先把上一次留下的残局收拾干净。
+ *
+ * 为什么需要：夹具会把"小说工作区"目录临时改成夹具目录，跑完再还原。但如果上一次跑被
+ * **硬杀**（实测：用 `Select-Object -First N` 截断输出会提前断开管道把进程杀掉，
+ * finally 根本走不到），用户的 _studio.json 就会永远停在"指向一个已经删掉的临时目录"上 ——
+ * 界面表现是"小说管理一打开就说工作区不存在"，而真正的原因在几天前的一次测试里。
+ * 所以把原配置另外存一份 sidecar：下一次开跑先把残局还原，再开始干活。
+ */
+function healFromCrash() {
+  try {
+    let did = false
+    // ① 上一轮被硬杀留下的夹具目录（前缀是本套件独有的，清掉不会误伤真实项目）
+    let leftovers = []
+    try {
+      leftovers = fs.readdirSync(ROOT, { withFileTypes: true })
+        .filter((d) => d.isDirectory() && /^_novel-test-/.test(d.name))
+        .map((d) => path.join(ROOT, d.name))
+    } catch (e) { /* 根目录读不到就算了 */ }
+    for (const p of leftovers) {
+      try { fs.rmSync(p, { recursive: true, force: true }); did = true } catch (e) { /* 占用中就留着 */ }
+    }
+    // ② 被留在"指向已删夹具"的小说工作区配置
+    if (fs.existsSync(CFG_BAK)) {
+      const prev = fs.readFileSync(CFG_BAK, 'utf8')
+      if (prev === '__none__') { try { fs.rmSync(CFG, { force: true }) } catch (e) { /* 忽略 */ } }
+      else fs.writeFileSync(CFG, prev, 'utf8')
+      fs.rmSync(CFG_BAK, { force: true })
+      did = true
+    }
+    return did
+  } catch (e) { return false }
+}
+const healed = healFromCrash()
+if (healed) console.log('  ⚠ 上一次跑被中断：已还原小说工作区配置并清掉夹具残留（自愈）')
+
 let cfgBackup = null
 try { cfgBackup = fs.readFileSync(CFG, 'utf8') } catch (e) { cfgBackup = null }
+try { fs.writeFileSync(CFG_BAK, cfgBackup === null ? '__none__' : cfgBackup, 'utf8') } catch (e) { /* 忽略 */ }
 
 for (const p of [WD, path.join(WD, '正文', '卷一_试卷'), path.join(WD, '设定集'), path.join(WD, '全本'), path.join(WD, '封面')]) {
   await fsp.mkdir(p, { recursive: true })
@@ -113,14 +152,25 @@ function call(cmd, args) {
     setTimeout(() => resolve({ error: 'TIMEOUT' }), 60000)
   })
 }
+/** 把夹具造出来的东西全部清掉，并还原小说工作区配置。 */
 const cleanup = async () => {
   await fsp.rm(LIB, { recursive: true, force: true })
   await fsp.rm(path.join(ROOT, PID), { recursive: true, force: true })
-  // 恢复原来的小说工作区配置（没有就删掉，别留下一个空文件影响真实使用）
+  // 恢复原来的小说工作区配置（原本没有就删掉，别留一个空文件影响真实使用）
   if (cfgBackup === null) { try { await fsp.rm(CFG, { force: true }) } catch (e) { /* 忽略 */ } }
   else { try { await fsp.writeFile(CFG, cfgBackup, 'utf8') } catch (e) { /* 忽略 */ } }
+  try { await fsp.rm(CFG_BAK, { force: true }) } catch (e) { /* 忽略 */ }
 }
-process.on('exit', () => { try { fs.rmSync(LIB, { recursive: true, force: true }); fs.rmSync(path.join(ROOT, PID), { recursive: true, force: true }) } catch (e) { /* 忽略 */ } })
+// 退出兜底：连配置一起还原（被硬杀时还有 sidecar 兜第二道）
+process.on('exit', () => {
+  try {
+    fs.rmSync(LIB, { recursive: true, force: true })
+    fs.rmSync(path.join(ROOT, PID), { recursive: true, force: true })
+    if (cfgBackup === null) fs.rmSync(CFG, { force: true })
+    else fs.writeFileSync(CFG, cfgBackup, 'utf8')
+    fs.rmSync(CFG_BAK, { force: true })
+  } catch (e) { /* 忽略 */ }
+})
 
 try {
   console.log('== 1. 媒体路由（小说工作区是第二个根）==')
