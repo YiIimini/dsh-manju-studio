@@ -384,5 +384,23 @@ ok(has(cli, '所以中文书名会自动换成一串短码'), '自动项目 id �
 ok(has(cli, '留空 = 用默认的「3D 动漫脸 + 干净画面」风格句'), '风格句默认值用人话说明（不写内部行话）')
 ok(has(cli, '剩下的内容留给下一集，不会丢'), '字数截断的结果提示用大白话（先给结论，再说原因）')
 
+console.log('== 幽灵作业：说在跑就必须看得见、停得掉（用户实测踩过）==')
+// 用户原话："什么狗鸡巴，日志又没有，还在跑？" —— 界面上只有一句"已有一条管线在运行"，
+// 底下其实没有进程，运行条一片空白，也没有停止入口，只能重启 DSH。
+// 四层原因：LLM 调用没超时 / 日志只在结束时落盘 / 没有作业级兜底 / 全局活动只认驱动器的记录。
+ok(has(host, 'const LLM_IDLE_MS') && has(host, 'const LLM_TOTAL_MS'), '大模型调用有"空闲 + 总时长"两道闸（卡住的源头）')
+ok(has(host, 'function jobWatchdogTick(') && has(host, 'const JOB_STALE_MS'), '有作业看门狗（静默超阈值就强制放行）')
+ok(has(host, 'job.log += \'\\n[看门狗]'), '放行时写明是看门狗干的（不是无声消失）')
+ok(has(host, "async 'jobs.list'()"), 'jobs.list：现在有哪些作业在跑、跑到哪、多久没输出了')
+ok(has(host, 'out.hostJobId = hj.id'), '全局活动也报宿主作业（界面起的管线原先完全不可见）')
+ok(has(host, 'job.log += chunk'), '「渲染」按钮的日志也累积进 job.log（否则看门狗会误判它卡死）')
+ok(has(host, '强制解除'), '被挡住时给出脱困办法（强制解除）')
+ok(has(host, 'flushJobLog(job).catch(() => {})') || has(host, 'flushJobLog(job).catch'),
+  '「停止」不等待落盘（点停止是为了脱困，不是等磁盘）')
+ok(has(host, 'nodeFsp.mkdir') , '日志落盘的建目录不走 cmd 子进程（子进程卡住不该连日志都写不了）')
+ok(has(cli, 'const stopHostJob = async'), '界面能停"不是本页面发起"的作业')
+ok(has(cli, 'onClick: () => stopHostJob(act.hostJobId)'), '运行条上有对应的「停止」按钮')
+ok(has(cli, 'hostJobId'), '界面读全局活动里的宿主作业 id')
+
 console.log('\n结果：PASS=' + pass + ' FAIL=' + fail)
 process.exit(fail ? 1 : 0)

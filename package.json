@@ -1,6 +1,6 @@
 {
   "name": "dsh-manju-studio",
-  "version": "0.37.0",
+  "version": "0.38.0",
   "private": true,
   "description": "漫剧工作台：小说→漫剧本地渲染管理平台。ComfyUI 启动管理（启动/停止/重启/状态/显存，带 --cache-none --disable-smart-memory --vram-headroom 资源治理，渲染前自动拉起）。AI 一条龙现在是真的闭环：环境体检 → 节点预检 → 方案（H3 六段式/三段式直出）→ 资产定妆（Krea-2 自动生成定妆照与场景图，Ref2VA 的 <Picture i> 因此有实指）→ 参考图解析 → 渲染 → 质检（黑屏防线）→ 自动返修换 seed → 合成（响度归一 + faststart）。",
   "type": "module",

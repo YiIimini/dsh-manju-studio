@@ -78,9 +78,9 @@ tools\check.cmd
 ```
 
 一条命令跑完全部检查：**语法闸门**（两个半当模块 import）、**包结构**、
-**14 个测试套件**（单元/组件、抽卡、合规、小说库、加速机制表、accel 迁移、媒体接口缓存/Range、
-项目增删/日志、沙箱契约、驱动器行为锁、小说工作区/一键做视频、合成契约、UI 结构与契约、状态扫描）、
-**渲染器 manju.py 的键完整性**。退出码非 0 即不要交付。
+**15 个测试套件**（单元/组件、抽卡、合规、小说库、加速机制表、accel 迁移、媒体接口缓存/Range、
+项目增删/日志、幽灵作业/看门狗、沙箱契约、驱动器行为锁、小说工作区/一键做视频、合成契约、
+UI 结构与契约、状态扫描）、**渲染器 manju.py 的键完整性**。退出码非 0 即不要交付。
 
 套件有两条硬规矩（2026-09-23 定，踩过坑）：
 
@@ -121,6 +121,11 @@ tools\check.cmd
 ## 相关
 
 - 渲染驱动：[dsh-manju-render](https://github.com/YiIimini/dsh-manju-render)
+
+## 许可
+
+MIT（见 [LICENSE](LICENSE)）。它是 [DSH（DeepSeek Harness）](https://github.com/deepseek-ai) 的插件，
+需要 DSH Desktop 运行环境；渲染部分依赖本机自建的 ComfyUI + MiniMax H3 权重，仓库不含任何模型文件。
 
 ## 工程约定
 
