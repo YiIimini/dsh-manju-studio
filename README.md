@@ -78,8 +78,8 @@ tools\check.cmd
 ```
 
 一条命令跑完全部检查：**语法闸门**（两个半当模块 import）、**包结构**、
-**13 个测试套件**（单元/组件、抽卡、合规、小说库、加速机制表、accel 迁移、媒体接口缓存/Range、
-项目增删/日志、驱动器行为锁、小说工作区/一键做视频、合成契约、UI 结构与契约、状态扫描）、
+**14 个测试套件**（单元/组件、抽卡、合规、小说库、加速机制表、accel 迁移、媒体接口缓存/Range、
+项目增删/日志、沙箱契约、驱动器行为锁、小说工作区/一键做视频、合成契约、UI 结构与契约、状态扫描）、
 **渲染器 manju.py 的键完整性**。退出码非 0 即不要交付。
 
 套件有两条硬规矩（2026-09-23 定，踩过坑）：
@@ -99,6 +99,12 @@ tools\check.cmd
 - **浏览器半**：必须是 `window.__ModuleLoader__.load({id, factory})` 形式，用 `fetch`（永久插件没有 `host.call`）。
   **必须声明 `exports.inject = ['slots']`** —— Cordis 禁止访问未声明的 `ctx.<service>`，漏了会在启动时报错。
 - package.json 需要 `dsh.bundle.patch`、`dsh.client: {platform:'web'}`，exports 暴露 `"."` 与 `"./client"`。
+- **写盘必须带"按调用沙箱策略"**：`ctx.fs` 是 `@deepseek-ai/dsh-fs-sandbox`，
+  `writeText(target, content, expected, signal, sandboxPolicy)` 的**第 5 个参数**决定围栏；
+  不传就套用部署默认（workspace-write + 会话工作区根），而本插件的两个根
+  （`D:\Ai\漫剧`、小说工作区）都在会话工作区之外 —— 界面里点一下就会报
+  `file access denied under workspace-write mode`（Agent 在 danger-full-access 会话里跑不出来，
+  只有真人在界面上点才会遇到）。宿主统一走 `writeText()` → `writeFileStamped()` 盖章，别绕过它。
 
 ## 踩过的坑（都会咬人）
 

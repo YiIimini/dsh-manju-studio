@@ -86,6 +86,9 @@ const SUITES = [
   // 这条套件是"封面一闪一闪"与"错误响应挂死"两个事故的回归闸门，放在仓库里而不是临时目录。
   ['媒体接口缓存/Range', 'manju-file-test.mjs', null],
   ['项目增删/日志', 'manju-crud-test.mjs', null],
+  // 沙箱契约：宿主写盘必须带"按调用策略"（界面发起的调用走部署默认 workspace-write，
+  // 而项目根不在会话工作区里）。这条套件把那个沙箱模拟出来，忘了带策略就当场被拒。
+  ['沙箱契约（写盘策略）', 'manju-sandbox-test.mjs', null],
   // 驱动器行为锁：manju-headless.py 拆成 manju_headless/ 包时，行为必须逐条对得上。
   // 断言在 driver_probe.py（Python 侧），这条只做包装。
   ['驱动器行为锁', 'manju-driver-test.mjs', null],
