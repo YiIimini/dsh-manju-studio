@@ -146,7 +146,7 @@ const ctx2 = Object.assign({}, ctx, {
 })
 host.apply(ctx2)
 ok(true, 'apply(ctx) 未抛异常')
-ok(routes.length === 2, 'apply 注册 2 条路由（实际 ' + routes.length + '）')
+ok(routes.length === 3, 'apply 注册 3 条路由（命令 API + 项目媒体 + 小说工作区媒体；实际 ' + routes.length + '）')
 
 const api2 = routes.filter((r) => r.path === '/api/manju-studio')[0]
 ok(!!api2, '命令路由路径正确')
@@ -733,16 +733,52 @@ pass('侧栏管线页', state({ '35': 'pipe' }), (o) => (o.tags.select || 0) ===
   && (o.tags.button || 0) >= 10)
 pass('分镜详情弹窗', state({ '33': { shot: { id: 's01', prompt: 'six-section', mode: 'r2v', shot_size: '近景', dialogue: [{ speaker: 'A', text: '台词' }] }, id: 's01', state: 'idle', refs: [], scene: null, secs: 5.2 } }),
   (o) => (o.cls['mj-mask'] || 0) === 1 && (o.cls['mj-modal'] || 0) === 1)
-// 小说管理视图已按用户要求移除（内容由用户直接提供，界面不再做目录管理）。
-// 改为断言：即使把 view 设成已不存在的 'novel'，界面也必须回退到视频管理而不是白屏。
-pass('已移除的小说视图会安全回退', state({ '0': 'novel' }), (o) => (o.tags.button || 0) >= 20)
-// 顶部导航（NAV）只剩 视频管理 / ComfyUI 两项 —— 用顶部导航容器里的按钮数断言，
+// 小说管理视图的历史（别再把这两件事搞混）：
+//   2026-09 早先有过一个"小说目录管理"界面，用户看过之后要求**移除**（原话口径：
+//   "内容由用户直接提供，界面不再做目录管理"）。
+//   2026-09-23 用户重新要求「小说管理页面 + 一键小说做视频」—— 这是**另一件事**：
+//   管理的是小说工作区（D:\Ai\小说）里的**作品**（立项书 / 分卷正文 / 设定集 / 全本 / 封面），
+//   出口是"一键做成漫剧"。所以视图回来了，但内容完全不同。
+pass('小说管理视图渲染（作品列表 + 一键做视频入口）', state({ '0': 'novel' }),
+  (o) => (o.cls['mj-novel'] || 0) === 1 && (o.cls['mj-plist'] || 0) >= 1 && (o.tags.button || 0) >= 5)
+// 未知 view 仍必须安全回退到视频管理（旧会话残留 / 拼错都不会白屏）
+pass('未知视图安全回退到视频管理', state({ '0': 'zz-nope' }), (o) => (o.tags.button || 0) >= 20)
+// 顶部导航（NAV）= 视频管理 / 小说管理 / ComfyUI 三项 —— 用顶部导航容器里的按钮数断言，
 // 不能拿 mj-navb 去数（那是侧栏的 4 个页签）
-pass('顶部导航只剩两项', state({}), (o) => (o.cls['mj-nav'] || 0) >= 1 && (o.tags.button || 0) >= 20)
+pass('顶部导航三项', state({}), (o) => (o.cls['mj-nav'] || 0) >= 1 && (o.tags.button || 0) >= 20)
 pass('ComfyUI 启动管理页', state({ '0': 'comfy' }), (o) => (o.tags.button || 0) >= 8
   && (o.cls['mj-led'] || 0) >= 1)
 pass('新建项目弹窗', state({ '25': true }), (o) => (o.tags.input || 0) >= 6)
 pass('角色管理弹窗', state({ '26': true }), (o) => (o.tags.img || 0) >= 2)
+// 小说管理：**有作品、且选中了详情**（这一页最怕的形态是"扫到了、点开却是空的"）
+// 状态索引 53=nRoot 54=nWorks 55=nSel 56=nDetail 57=nPre 58=nForm（新状态一律追加在末尾）
+const NOVEL_WORK = {
+  work: '测试作品甲', title: '测试作品甲', genre: '玄幻修仙', depth: '无脑爽', route: 'novel',
+  createdAt: '2026-09-23', hook: '一句高概念', logline: '一句卖点', protagonist: '器灵·机关木偶',
+  art: '3D 动漫脸（非真人）', hasMeta: true, volCount: 1,
+  vols: [{ vol: '卷一_试卷', chapters: 3, chars: 9000 }], chapterCount: 3, chars: 9000,
+  full: { rel: '全本/测试作品甲·全本.md', name: 'x', chars: 10000 },
+  settings: [{ name: '设定集与大纲.md', size: 100 }], cover: '封面/封面.png',
+}
+const NOVEL_DETAIL = Object.assign({}, NOVEL_WORK, {
+  volList: [{
+    vol: '卷一_试卷', chars: 9000,
+    chapters: [
+      { rel: '正文/卷一_试卷/第001章_第一章名.md', name: '第001章_第一章名.md', title: '第001章 第一章名', size: 3000, chars: 3000 },
+      { rel: '正文/卷一_试卷/第002章_第二章名.md', name: '第002章_第二章名.md', title: '第002章 第二章名', size: 3000, chars: 3000 },
+    ],
+  }],
+  meta: { 书名: '测试作品甲' },
+})
+pass('小说管理页（有作品 + 选中详情 + 正文预览）',
+  state({ '0': 'novel', '53': 'D:\\\\Ai\\\\小说', '54': [NOVEL_WORK], '55': '测试作品甲', '56': NOVEL_DETAIL, '57': { rel: '正文/卷一_试卷/第001章_第一章名.md', text: '正文', chars: 3000, truncated: true } }),
+  (o) => (o.cls['mj-novel'] || 0) === 1 && (o.tags.img || 0) >= 2 && (o.tags.button || 0) >= 8)
+pass('一键做视频表单（范围 / 集号 / 风格）',
+  state({
+    '0': 'novel', '54': [NOVEL_WORK], '55': '测试作品甲', '56': NOVEL_DETAIL,
+    '58': { work: '测试作品甲', title: '测试作品甲', id: '', episode: '', epName: '', kind: 'chapter', vol: '', chapter: '', count: 1, style: '', genre: '玄幻修仙', mode: 'ai', autoStart: true },
+  }),
+  (o) => (o.cls['mj-mask'] || 0) === 1 && (o.tags.select || 0) >= 1)
 pass('无模型路由时退回手填', state({ '8': [], '30': [] }), (o) => (o.tags.select || 0) === 0)
 pass('风格预设可选', state({ '30': [{ key: 'ink_wash', name: '水墨国风', prompt: 'INK' }] }),
   (o) => (o.tags.span || 0) >= 1)

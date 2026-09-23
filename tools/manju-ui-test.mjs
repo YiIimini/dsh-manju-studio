@@ -307,5 +307,40 @@ ok(!/\.mj-dots\{[^}]*opacity:0/.test(cliCss), '⋯ 按钮常驻可见（隐藏�
 ok(has(cli, '.mj-dots::after{content:"";position:absolute;inset:-8px}'), '⋯ 命中区撑到 40×40（技能库：密集桌面 ≥40px）')
 ok(has(cli, 'border-radius:var(--mj-r-lg);cursor:pointer'), '行与缩略图同心圆角（外层 = 内层 + 内边距）')
 
+console.log('== 小说管理 / 一键做视频 ==')
+// 用户 2026-09-23：「小说目录 D:\Ai\小说，现在需要增加小说管理页面，并且能一键小说进行视频制作功能」。
+// 别和历史混淆：早先有过一个"小说目录管理"界面，用户看过之后要求**移除**（"界面不再做目录管理"）。
+// 这次要的是**作品管理 + 一键做视频**：管的是 D:\Ai\小说 里的作品
+// （立项书 / 分卷正文 / 设定集 / 全本 / 封面），出口是"一键做成漫剧"。
+ok(has(host, "const NOVEL_ROOT_DEFAULT = 'D:\\\\Ai\\\\小说'"), '小说工作区默认目录 = D:\\Ai\\小说')
+ok(has(host, "'novel.works'") && has(host, "'novel.work'") && has(host, "'novel.read'"), '作品清单 / 详情 / 正文三条命令')
+ok(has(host, "async 'novel.toVideo'(a)"), '一键做视频命令')
+ok(has(host, 'path: NOVEL_FILE_PATH'), '小说工作区的封面路由与项目产物**分开两条**（一个 root 参数会让路径校验形同虚设）')
+ok(has(host, 'function serveMedia('), '两个根共用同一套媒体语义（ETag/304/Range/206/HEAD/416 不复制第二份）')
+ok(has(host, 'function createProjectDir('), '建项目只有一处实现（新建项目与一键做视频共用）')
+ok(has(host, "async 'novel.root'(a)") && has(host, 'function setNovelRoot('), '小说工作区目录可切换且落盘')
+ok(has(host, 'function stampEpisode('), '方案产物盖集戳（镜头带 episode、id 带集前缀）')
+ok(has(host, 'shots.json.bak') && has(host, 'plan.json.bak'), '分集合并要读旧内容（否则做第二集会顶掉第一集）')
+ok(has(host, 'function nextEpisodeId('), '集号自动往后排（"再做一集"仍然是一键）')
+ok(has(host, "novel-' + ep + '.md'"), '本集素材单独落盘 novel-<集>.md（不覆盖 novel.md）')
+ok(has(host, "novel-source-' + ep + '.json'"), '写溯源文件（这一集来自哪本书的哪些章）')
+ok(has(host, 'PLAN_INPUT_MAX'), '方案阶段正文字数上限是常量（不散落魔法数）')
+ok(has(host, 'truncated: scope.truncated'), '截断如实回报（不假装整本书都进了分镜）')
+ok(has(host, "'_render-' + job.episode + '.json'"), '分集渲染清单 _render-<集>.json')
+ok(has(host, "'成片-' + ep + '.mp4'"), '分集成片 成片-<集>.mp4')
+ok(has(host, "'output/final' + (ep ? '-' + ep : '') + '.ass'"), '分集字幕 output/final-<集>.ass')
+ok(has(host, "clips[i].name.indexOf(ep + '-') !== 0"), '合成与质检按集裁镜头（不裁会把别的集也拼进来）')
+ok(/episode: job\.episode/.test(host), '管线把集号一路传下去（方案 / 渲染 / 质检 / 合成）')
+ok(has(cli, '["novel", "小说管理"]'), '顶部导航有「小说管理」')
+ok(has(cli, 'function viewNovel('), '有小说管理视图')
+ok(has(cli, 'className: "mj-views mj-novel"'), '该视图有独立标记类（套件靠它认页，未知 view 仍回退视频管理）')
+ok(has(cli, '一键做视频'), '作品详情里有「一键做视频」入口')
+ok(has(cli, 'h(Modal, { title: "一键做视频"'), '有范围 / 集号 / 风格的表单弹窗')
+ok(has(cli, 'const NOVELFILE = "/manju-novel-file"') && has(cli, 'function novelUrl('), '封面走小说工作区的媒体路由')
+ok(has(cli, '留空 = 自动排下一集'), '集号可留空（由宿主自动排下一集）')
+ok(has(cli, 'scope: { kind: f.kind, vol: f.vol, chapter: f.chapter, count: f.count }'), '范围选择原样传给宿主')
+ok(/const \[shotSort, setShotSort\][\s\S]{0,400}const \[nRoot, setNRoot\]/.test(cli),
+  '小说管理的新状态追加在状态清单末尾（索引注入的套件要求）')
+
 console.log('\n结果：PASS=' + pass + ' FAIL=' + fail)
 process.exit(fail ? 1 : 0)
