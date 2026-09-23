@@ -38,6 +38,7 @@ faststart）。产物落进同一个项目目录，因此工作台界面照样�
 from __future__ import annotations
 
 import argparse
+import difflib
 import json
 import os
 import re
@@ -237,9 +238,9 @@ def params_of(pid):
     return meta, (meta.get("params") or {})
 
 
-def run(cmd, cwd=None, timeout=None):
+def run(cmd, cwd=None, timeout=None, env=None):
     r = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True,
-                       encoding="utf-8", errors="replace", timeout=timeout)
+                       encoding="utf-8", errors="replace", timeout=timeout, env=env)
     return r.returncode, (r.stdout or ""), (r.stderr or "")
 
 
@@ -974,6 +975,115 @@ def ensure_mandarin(text):
         "matching the [Chinese] tag inside each <d>…</d>; no English, no Japanese, no invented or gibberish speech, "
         "no foreign accent. Ambient non-speech sound only where the soundscape asks for it."
     )
+
+
+def _norm_text(s):
+    """只留中日韩汉字与字母数字：标点/空白不参与比对（转写不会给一样的标点）。"""
+    return re.sub(r"[^\u4e00-\u9fff0-9A-Za-z]", "", str(s or ""))
+
+
+def _asr_segments(raw):
+    """
+    从转写文件里取出**分段**（带时间戳那些行），并补上"相邻段拼接"的候选。
+
+    为什么要拼接：ASR 会按停顿把一句话切成两段（"我听不见人话" / "可我听得见规矩"），
+    拿整句去比任何单段都只有 0.5 左右 —— 那是比对方式的错，不是语音的错（实测栽过）。
+    """
+    segs = []
+    for line in str(raw or "").splitlines():
+        m = re.match(r"^\[\s*[\d.]+-\s*[\d.]+\]\s*(.+)$", line.strip())
+        if m and m.group(1).strip():
+            segs.append(_norm_text(m.group(1)))
+    out = list(segs)
+    for i in range(len(segs) - 1):
+        out.append(segs[i] + segs[i + 1])
+    for i in range(len(segs) - 2):
+        out.append(segs[i] + segs[i + 1] + segs[i + 2])
+    return out
+
+
+def _best_sim(want, cands):
+    """
+    台词 vs 转写候选的最高相似度。
+
+    先用"包含"做快路径（听对了就是这么回事），再退到相似度 —— ASR 必错同音字
+    （守/首、默/末、应/硬），全等会把"听对了"判成"没听对"。
+    """
+    if not want:
+        return 0.0
+    best = 0.0
+    for c in cands:
+        if not c:
+            continue
+        if want in c:
+            return 1.0
+        r = difflib.SequenceMatcher(None, want, c).ratio()
+        if r > best:
+            best = r
+    return best
+
+
+def cmd_voice(args):
+    """
+    语音验收：把成片的音轨转写出来，与剧本台词**逐条**比对。
+
+    补的是管线里最后一个"肉眼验不了"的环节：字幕是后期烧上去的，跟音轨里实际说的话
+    是两回事；H3 若漏了语言标记会输出鸟语，而画面上完全看不出来。
+    走 CPU 推理（不占显存，与 ComfyUI 不冲突）。
+    """
+    pid = args.project
+    need_project(pid)
+    ep = str(args.episode or "").strip()
+    final = project_path(pid, ("成片-%s.mp4" % ep) if ep else "成片.mp4")
+    if not os.path.isfile(final):
+        raise SystemExit("还没有成片：%s" % os.path.basename(final))
+    asr = r"D:\Ai\Tools\ASR\asr.cmd"
+    if not os.path.isfile(asr):
+        raise SystemExit("没找到 ASR：D:\\Ai\\Tools\\ASR\\asr.cmd（见 D:\\Ai\\Tools\\ASR\\README.md）")
+    out = project_path(pid, "output", ("asr-%s.txt" % ep) if ep else "asr.txt")
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    print("转写中（CPU 推理，68s 成片约 1~4 分钟）…", flush=True)
+    env = dict(os.environ)
+    env.update({"PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"})
+    code, so, se = run([asr, final, "--model", args.model, "--out", out], timeout=3600, env=env)
+    if code != 0 or not os.path.isfile(out):
+        print("转写失败：" + (se or so or "")[-400:])
+        return 1
+    raw = open(out, encoding="utf-8").read()
+    cands = _asr_segments(raw)
+    if not cands:
+        print("转写里没有可用分段（VAD 可能把整条音轨当静音吞了）")
+        return 1
+    head = [l for l in raw.splitlines() if l.startswith("#")]
+
+    plan = read_json(project_path(pid, "plan.meta.json"), {})
+    shots = [s for s in (plan.get("shots") or []) if (not ep or shot_episode(s) == ep)]
+    rows, hits, total = [], 0, 0
+    for s in shots:
+        for d in (s.get("dialogue") or []):
+            want = _norm_text(d.get("text"))
+            if not want:
+                continue
+            total += 1
+            sim = _best_sim(want, cands)
+            # 超短行要单独放宽：2 个字的台词（"阿默。"）只要同音字错一个，
+            # 相似度就是 0.5 —— 那是**度量的局限**，不是听错了（实测 ASR 听成"阿末"）。
+            thr = float(args.min_sim) if len(want) > 3 else min(float(args.min_sim), 0.5)
+            ok = sim >= thr
+            if ok:
+                hits += 1
+            rows.append((str(s.get("id")), str(d.get("text")), sim, ok))
+    print("\n=== 语音验收 %s%s ===" % (pid, (" · " + ep) if ep else ""))
+    for h in head:
+        print("  " + h.lstrip("# ").strip())
+    for sid, text, sim, ok in rows:
+        print("  %-9s %-5s %.2f  %s" % (sid, "命中" if ok else "存疑", sim, text))
+    rate = (100.0 * hits / total) if total else 0.0
+    print("\n台词命中 %d/%d（%.0f%%），阈值 %.2f；转写全文见 %s"
+          % (hits, total, rate, float(args.min_sim), os.path.basename(out)))
+    if rate < 60:
+        print("⚠ 命中率偏低：先看是不是提示词漏了 <d>[Chinese] 标记或普通话锁（会输出鸟语）")
+    return 0 if rate >= 60 else 1
 
 
 def dry_run_graphs(rj, pid):
@@ -1804,6 +1914,13 @@ def main():
     ep = sub.add_parser("episodes", help="列出本项目的分集概况")
     ep.add_argument("--project", required=True)
     ep.set_defaults(func=cmd_episodes)
+
+    vo = sub.add_parser("voice", help="语音验收：转写成片音轨并与剧本台词逐条比对")
+    vo.add_argument("--project", required=True)
+    vo.add_argument("--episode", default="")
+    vo.add_argument("--model", default="medium", help="whisper 模型，默认 medium")
+    vo.add_argument("--min-sim", dest="min_sim", type=float, default=0.6, help="判定阈值，默认 0.6")
+    vo.set_defaults(func=cmd_voice)
 
     s = sub.add_parser("sync", help="解析参考图 → _render.json")
     s.add_argument("--project", required=True)

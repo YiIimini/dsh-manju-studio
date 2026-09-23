@@ -230,5 +230,27 @@ ok(has(host, 'const fadeMs = o.subtitleFadeMs === undefined ? 140'), '宿主 bui
 ok(has(host, '+ (fadeMs ? \'{\\\\fad(\' + fadeMs'), '宿主字幕写入 \\fad 标签')
 ok(has(py, 'def series_find(') && has(py, 'def series_pull('), '系列池函数齐备（跨集同一张脸）')
 
+console.log('== 项目内分集 / 语音验收 / 列表排版 ==')
+// 一集一项目是错的：工作台本来按镜头自己的 episode 过滤（pickShots）
+ok(has(py, 'def shot_episode('), '驱动器认识镜头的 episode 字段')
+ok(has(py, 'def episodes_in('), '能列出项目内的分集')
+ok(has(py, 'def render_doc_path('), '分集各有自己的渲染清单 _render-<集>.json')
+ok(has(py, 'def cmd_absorb('), '有 absorb：把独立项目吸收成本项目的某一集')
+ok(has(py, 'def cmd_episodes('), '有 episodes：分集概况')
+ok(has(py, 'prompts/%s/%s.txt" % (ep, os.path.splitext'), '提示词按集分目录（且扩展名不重复拼）')
+ok(has(py, 'out_name = "成片-%s.mp4" % ep'), '分集成片 成片-<集>.mp4')
+ok(has(py, 'ass_rel = "output/final-%s.ass" % ep'), '分集字幕 final-<集>.ass')
+ok(has(py, 'return os.path.basename(out)'), '片头卡返回真正写出的文件名（硬编码 _intro.mp4 会让两集共用一张旧卡）')
+ok(has(host, 'episodeCount'), 'summary 给出集数')
+ok(has(host, 'finalCount'), 'summary 给出成片数')
+ok(has(cli, 'Number(p.episodeCount) ? Number(p.episodeCount) + " 集"'), '列表元信息里有集数')
+ok(has(cli, '.mj-pthumb{flex:0 0 auto;width:84px;height:48px'), '封面缩略图放大到 84×48（原来 56×32 认不出画面）')
+ok(has(cli, '.mj-c1{flex:0 0 272px}'), '项目列加宽到 272px')
+// 语音验收（ASR）：字幕是后期烧的，跟音轨里真说的话是两回事
+ok(has(py, 'def cmd_voice('), '有 voice：转写成片音轨并与剧本台词逐条比对')
+ok(has(py, 'def _asr_segments('), '按 ASR 分段比对（一句话被切成两段也能命中）')
+ok(has(py, 'def _best_sim('), '相似度而非全等（同音字必错）')
+ok(has(py, 'if len(want) > 3 else min(float(args.min_sim), 0.5)'), '超短台词单独放宽（2 字行同音即 0.5，是度量局限）')
+
 console.log('\n结果：PASS=' + pass + ' FAIL=' + fail)
 process.exit(fail ? 1 : 0)
