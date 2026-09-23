@@ -276,5 +276,12 @@ ok(/const \[shotSort, setShotSort\][\s\S]{0,200}$/.test(cli.slice(0, cli.indexOf
   || cli.indexOf('const [shotSort, setShotSort]') > cli.indexOf('const [playerFor, setPlayerFor]'),
   '新状态追加在状态清单末尾（索引注入的套件要求）')
 
+console.log('== 实时日志必须接进既有窗口（不许另造浮层）==')
+// 用户原话："底部倒数第二个窗口元素不就是运行日志窗口，你为什么还重新创建一个悬浮窗口？多突兀啊"
+ok(!has(cli, 'mj-act'), '没有另造的悬浮监视条（实时日志走底部既有的运行日志窗口）')
+ok(has(cli, 'const ext = (!job && act && act.active'), 'runBar 消费全局活动（外部管线日志进同一窗口）')
+ok(has(cli, 'extLines'), '外部日志与界面作业日志共用同一块显示区')
+ok(has(cli, '外部管线运行中'), '外部作业在窗口里有明确标识（项目/命令/已跑时长）')
+
 console.log('\n结果：PASS=' + pass + ' FAIL=' + fail)
 process.exit(fail ? 1 : 0)
