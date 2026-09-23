@@ -1568,18 +1568,37 @@ def build_ass(shots, starts, width, height, size_pct=5.0, tail_trim=0.0, fade_ms
                 continue
             name = str((d or {}).get("speaker") or "").strip()
             is_narr = bool(re.search(r"旁白|narrator|voiceover", name, re.I))
-            # **角色台词带说话人**：观众要能知道是谁在说。
-            # 旁白不加前缀（它本来就没有"人"）。前缀并入折行计算，免得顶出画面。
             label = "" if (is_narr or not name) else (name + "：")
+            # ── 字幕卡类型 ──
+            # 短剧要"易懂 + 会玩梗"，靠的是**不只一行底部旁白字幕**：
+            #   sys     系统提示（左上、薄荷绿）—— 把设定钉死，观众一秒懂金手指
+            #   danmaku 弹幕（顶部小灰字）—— 玩梗层
+            #   sfx     音效大字（画面中央）—— 节奏重音
+            # 用行内 ASS 覆盖标签实现，不动 Style 表（改动面最小、也不需要新模板）。
+            kind = str((d or {}).get("kind") or "").strip().lower()
+            if kind in ("sys", "system"):
+                tag = ("{\\an7\\pos(%d,%d)\\fs%d\\c&H60E0D0&\\bord3\\3c&H00000000&\\fad(%d,%d)}"
+                       % (int(width * 0.05), int(height * 0.06), int(size * 0.66), int(fade_ms), int(fade_ms)))
+                body = txt
+            elif kind in ("danmaku", "dm"):
+                tag = ("{\\an8\\pos(%d,%d)\\fs%d\\c&HA8A8A8&\\fad(%d,%d)}"
+                       % (width // 2, int(height * 0.04), int(size * 0.52), int(fade_ms), int(fade_ms)))
+                body = txt
+            elif kind in ("sfx", "fx"):
+                tag = ("{\\an5\\pos(%d,%d)\\fs%d\\c&HFFFFFF&\\bord7\\3c&H00000000&\\fad(60,140)}"
+                       % (width // 2, height // 2, int(size * 2.2)))
+                body = txt
+            else:
+                tag = ("{\\fad(%d,%d)}" % (int(fade_ms), int(fade_ms))) if fade_ms else ""
+                body = wrap_ass_text(label + txt, max_units)
             t0 = start + each * k
             t1 = start + each * (k + 1) - 0.06
             if t1 - t0 < 0.2:
                 continue
             lines.append("Dialogue: 0,%s,%s,%s,%s,0,0,0,,%s%s" % (
-                ass_time(t0), ass_time(t1), "旁白" if is_narr else "对白",
-                name,
-                ("{\\fad(%d,%d)}" % (int(fade_ms), int(fade_ms))) if fade_ms else "",
-                wrap_ass_text(label + txt, max_units)))
+                ass_time(t0), ass_time(t1),
+                "系统" if kind in ("sys", "system") else ("弹幕" if kind in ("danmaku", "dm") else ("旁白" if is_narr else "对白")),
+                name, tag, body))
             n += 1
     return "\n".join(lines), n, size, max_units
 
