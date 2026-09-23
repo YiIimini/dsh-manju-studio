@@ -20,19 +20,23 @@ set PY=D:\Ai\ComfyUI\standalone-env\python.exe
 set TOOLS=D:\Ai\DSH-plugins\dsh-manju-studio\tools
 set FAIL=0
 
-echo [1/4] python syntax of manju-headless.py
+echo [1/5] python syntax of manju-headless.py
 "%PY%" -X utf8 -c "import py_compile;py_compile.compile(r'%TOOLS%\manju-headless.py',doraise=True);print('  OK')"
 if errorlevel 1 set FAIL=1
 
-echo [2/4] orphaned def / unreachable body scan
+echo [2/5] orphaned def / unreachable body scan
 "%PY%" -X utf8 "%TOOLS%\gate_lint.py"
 if errorlevel 1 set FAIL=1
 
-echo [3/4] non-ASCII bytes in .cmd / .ps1
+echo [3/5] non-ASCII bytes in .cmd / .ps1
 "%PY%" -X utf8 "%TOOLS%\gate_ascii.py" "D:\Ai\Tools" "D:\Ai\DSH-plugins\dsh-manju-studio" "%USERPROFILE%\.dsh\skills"
 if errorlevel 1 set FAIL=1
 
-echo [4/4] plugin suites
+echo [4/5] module hygiene (cycles / package layout / oversized single files)
+"%PY%" -X utf8 "%TOOLS%\gate_modules.py" "D:\Ai\DSH-plugins\dsh-manju-studio" "D:\Ai\Tools"
+if errorlevel 1 set FAIL=1
+
+echo [5/5] plugin suites
 call "%TOOLS%\check.cmd"
 if errorlevel 1 set FAIL=1
 

@@ -65,3 +65,7 @@ tools\check.cmd
 ## 相关
 
 - 渲染驱动：[dsh-manju-render](https://github.com/YiIimini/dsh-manju-render)
+
+## 工程约定
+
+新建项目/新增模块请先读 [docs/CONVENTIONS.md](docs/CONVENTIONS.md)：模块化、解耦、可测、可回滚的落地标准（用户 2026-09-23 要求）。
