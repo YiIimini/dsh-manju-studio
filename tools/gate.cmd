@@ -24,8 +24,10 @@ echo [1/5] python syntax of manju-headless.py
 "%PY%" -X utf8 -c "import py_compile;py_compile.compile(r'%TOOLS%\manju-headless.py',doraise=True);print('  OK')"
 if errorlevel 1 set FAIL=1
 
-echo [2/5] orphaned def / unreachable body scan
-"%PY%" -X utf8 "%TOOLS%\gate_lint.py"
+echo [2/5] orphaned def / unreachable body scan (whole tools/ dir)
+REM NOTE: pass the tools dir explicitly. This step used to be called with NO paths,
+REM so its loop never ran and it printed OK forever -- a gate check that checked nothing.
+"%PY%" -X utf8 "%TOOLS%\gate_lint.py" "%TOOLS%"
 if errorlevel 1 set FAIL=1
 
 echo [3/5] non-ASCII bytes in .cmd / .ps1

@@ -15,6 +15,7 @@ py_compile 也不报错（语法是合法的），只有真正调用时才 NameE
 退出码：0 干净，1 有问题（gate.cmd 会因此拦下）。
 """
 import ast
+import os
 import sys
 
 
@@ -54,15 +55,31 @@ def check_file(path):
 
 
 def main():
+    # 参数可以是文件，也可以是目录（目录会递归扫 .py）。
+    # **没有参数时默认扫 tools/ 自己** —— 这一条是被"闸门空转"教会的：
+    # gate.cmd 原来调用本脚本时一个路径都没传，于是循环体从不执行、永远打印 OK，
+    # 这个检查步骤在闸门里空转了很久而没人发现。默认值让"空转"不可能再发生。
+    args = sys.argv[1:] or [os.path.dirname(os.path.abspath(__file__))]
+    paths = []
+    for a in args:
+        if os.path.isdir(a):
+            for root, _dirs, names in os.walk(a):
+                if os.sep + '__pycache__' in root:
+                    continue
+                for n in sorted(names):
+                    if n.endswith(".py"):
+                        paths.append(os.path.join(root, n))
+        else:
+            paths.append(a)
     bad = 0
-    for path in sys.argv[1:]:
+    for path in paths:
         for p, line, why in check_file(path):
             bad += 1
             print("  LINT %s:%s %s" % (p, line, why))
     if bad:
         print("  → %d 处可疑，先修再往下跑" % bad)
         return 1
-    print("  OK 没有不可达代码 / 孤立函数体")
+    print("  OK 扫了 %d 个 .py，没有不可达代码 / 孤立函数体" % len(paths))
     return 0
 
 

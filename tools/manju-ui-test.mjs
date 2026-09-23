@@ -13,13 +13,24 @@
  *   * 防重绘     → 行数据必须按内容签名记忆化，而不是按对象引用
  */
 import fs from 'node:fs'
+import path from 'node:path'
 
 const HOST = 'D:\\Ai\\DSH-plugins\\dsh-manju-studio\\lib\\index.js'
 const CLIENT = 'D:\\Ai\\DSH-plugins\\dsh-manju-studio\\lib\\client.js'
-const HEADLESS = 'D:\\Ai\\DSH-plugins\\dsh-manju-studio\\tools\\manju-headless.py'
+const TOOLS = 'D:\\Ai\\DSH-plugins\\dsh-manju-studio\\tools'
 const host = fs.readFileSync(HOST, 'utf8')
 const cli = fs.readFileSync(CLIENT, 'utf8')
-const py = fs.readFileSync(HEADLESS, 'utf8')
+// 驱动器已按能力拆成 tools/manju_headless/ 包，入口只剩薄壳。
+// 这一组断言关心的是"这个行为在驱动器里存在"，而不是"它写在哪个文件"——
+// 所以读**入口 + 全部模块**的合并文本（拆包不该让这些断言失效，也不该让它们变松）。
+const py = (function () {
+  const parts = [fs.readFileSync(path.join(TOOLS, 'manju-headless.py'), 'utf8')]
+  const pkg = path.join(TOOLS, 'manju_headless')
+  for (const n of fs.readdirSync(pkg).sort()) {
+    if (n.endsWith('.py')) parts.push(fs.readFileSync(path.join(pkg, n), 'utf8'))
+  }
+  return parts.join('\n')
+})()
 
 let pass = 0
 let fail = 0

@@ -58,6 +58,8 @@ lib/index.js          宿主半（Node）：命令接口 + 媒体流服务（两
 lib/client.js         浏览器半：工作台全部界面
 tools/check.mjs       提交前自检（见下）
 tools/check.cmd       Windows 包装
+tools/manju_headless/ 无头驱动器（按能力拆成包，职责见 tools/README-driver.md）
+tools/manju-headless.py  驱动器入口（薄壳，路径与名字都没变）
 docs/CONVENTIONS.md   模块化 / 解耦 / 可测的落地标准
 ```
 
@@ -76,8 +78,8 @@ tools\check.cmd
 ```
 
 一条命令跑完全部检查：**语法闸门**（两个半当模块 import）、**包结构**、
-**11 个测试套件**（单元/组件、抽卡、合规、小说库、加速机制表、accel 迁移、媒体接口缓存/Range、
-项目增删/日志、小说工作区/一键做视频、UI 结构与契约、状态扫描）、
+**12 个测试套件**（单元/组件、抽卡、合规、小说库、加速机制表、accel 迁移、媒体接口缓存/Range、
+项目增删/日志、驱动器行为锁、小说工作区/一键做视频、UI 结构与契约、状态扫描）、
 **渲染器 manju.py 的键完整性**。退出码非 0 即不要交付。
 
 套件有两条硬规矩（2026-09-23 定，踩过坑）：

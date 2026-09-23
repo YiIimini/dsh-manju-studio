@@ -38,27 +38,31 @@
       而不是写在注释里靠人记
 - [ ] 变更可回滚：仓库在 git 里，重产物不入库但有备份目录约定
 
-## 四、本仓库的已知债与拆解方向
+## 四、已知债（历史）
 
-`tools/manju-headless.py` 目前是**单文件约 2100 行**（历史累积：构建、同步、渲染、质检、
-合成、封面、分集、语音验收、系列资产池全在一个文件里）。它已经踩到单文件的两条红线：
-改一处要通读全局、模块边界只能靠人记。
+`tools/manju-headless.py` 曾经是**单文件约 2100 行**（构建、同步、渲染、质检、合成、封面、
+分集、语音验收、系列资产池全挤在一起），踩到单文件的两条红线：改一处要通读全局、
+模块边界只能靠人记。
 
-**拆解方向**（维护窗口执行，不打断正在跑的渲染）：
+**已于 2026-09-23 拆完**（见 [tools/README-driver.md](../tools/README-driver.md)）：
 
 ```
-tools/manju/            # 包
-  paths.py     项目路径与项目解析
-  prompts.py   H3 六段式组装、空间锚点、普通话锁
-  comfy.py     ComfyUI 客户端、显存归还、图提交
-  media.py     ffmpeg 封装、字幕、合成
-  covers.py    封面生成
-  episodes.py  分集与系列资产池
-  qc.py        质检与自检报告
-  asr.py       语音验收
-  cli.py       argparse + 调度（薄入口）
-tools/manju-headless.py  # 只保留 `from manju.cli import main`
+tools/manju_headless/     # 包：一个文件一个能力（路径 / ComfyUI / 提示词 / 字幕 / 质检 / …）
+  paths.py  jsonio.py  procs.py  comfy.py  prompts.py  series.py  shots.py
+  sync.py  media.py  subtitles.py  render.py  compose.py  qc.py  asr.py
+  voice.py  assets.py  cover.py  project.py  cli.py
+tools/manju-headless.py   # 只剩薄壳（import 包 + 调 cli.main），路径与名字都没变
 ```
 
-拆解时**先用断言锁住现有行为**（现有 11 个套件就是安全网），再一段一段搬，
-每搬一块跑一次 `gate.cmd`——保证任何一步都能停、都能回滚。
+拆解过程遵守了两条纪律，值得沿用：
+
+1. **先写行为锁再搬代码**：`tools/driver_probe.py`（40 条）锁住"入口仍暴露哪些公开名"
+   与"纯函数/子命令的实际输出"，由闸门套件 `驱动器行为锁` 执行。没有它，机械搬迁
+   等于赌博。
+2. **机械搬运，不顺手重构**：用 AST 按顶层定义的行区间原样搬运（连注释一起），
+   一个字符都不改。想改逻辑就**另开一次提交**，别和搬迁混在一起 ——
+   混在一起时出了 bug，你分不清是"搬错了"还是"改错了"。
+
+搬完的收益是可验证的：`gate.cmd` 的模块卫生检查从"1 条体量债"变成 **0 条**，
+每个模块都能单独读、单独测。剩下的流程细化（把 `cmd_*` 里的业务流程再抽成纯函数）
+记在 `tools/README-driver.md` 末尾，属于下一步，不阻塞。
