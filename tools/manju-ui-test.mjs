@@ -89,7 +89,8 @@ ok(has(cli, 'const mh = /^\\[(\\d+)\\/(\\d+)\\]\\s+(\\S+)/.exec(L)'), '认得渲
 ok(has(cli, 'sections: splitLogSections(shown)'), '活日志面板走分段渲染')
 ok(has(cli, 'sections: splitLogSections(logTailLines(logView.text))'), '日志弹窗走分段渲染')
 ok(has(cli, 'const [logReverse, setLogReverse] = React.useState(true)'), '日志弹窗默认倒序（最新在上）')
-ok(has(cli, 'const [liveReverse, setLiveReverse] = React.useState(false)'), '活日志面板有正/倒序开关')
+// 用户 2026-09-23："默认倒序啊" —— 底部运行窗口原来默认正序，与日志弹窗口径不一致，已统一为倒序
+ok(has(cli, 'const [liveReverse, setLiveReverse] = React.useState(true)'), '活日志面板**默认倒序**（最新在上，与日志弹窗一致）')
 ok(has(cli, 'el.scrollTop = liveReverse ? 0 : el.scrollHeight'), '倒序时自动吸顶、正序时吸底')
 ok(has(cli, 'function logTailLines('), '只渲染日志尾部（几百 KB 的日志不塞满 DOM）')
 ok(has(cli, '.mj-lsech{position:sticky'), '阶段标题吸顶且高对比')
