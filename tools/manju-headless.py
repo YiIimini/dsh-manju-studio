@@ -723,9 +723,13 @@ def auto_chain_in_runs(shots, enabled=True):
     prev = None
     for s in shots:
         run = shot_run(s)
-        if run and prev is not None and shot_run(prev) == run and not s.get("chain_from_prev"):
-            s["chain_from_prev"] = True
-            n += 1
+        if run and prev is not None and shot_run(prev) == run:
+            if not s.get("chain_from_prev"):
+                s["chain_from_prev"] = True
+                n += 1
+            # **无条件重写**：chain_from_prev 可能是上一次 sync 落盘的，
+            # 那时还没有 chain_from 这个字段（第一版只写 prev 标记）—— 只在"新设置"时写会永远补不上。
+            s["chain_from"] = str(prev.get("id") or "")
         prev = s
     return n
 
