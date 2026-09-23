@@ -700,6 +700,62 @@ def episodes_in(plan):
     return out
 
 
+def shot_run(shot):
+    """镜头所属的"连续段"（同一地点/同一动作的一串镜头）。"""
+    return str((shot or {}).get("run") or "").strip()
+
+
+def auto_chain_in_runs(shots, enabled=True):
+    """
+    **连续段内自动接镜**：同一 run 里，除第一镜外全部把上一镜末帧钉在第 0 帧。
+
+    为什么必须默认开：实测 EP01 的 11 处切点里只有 1 处做了帧接续，
+    其余末帧→首帧 SSIM 只有 0.54~0.71（等于两张无关的图硬切），
+    观众看到的就是"12 张招贴画轮播"——这就是"看得莫名其妙"的量化根因。
+    接了镜的那一处是 0.943，差距一眼可见。
+
+    为什么**只在段内**开：跨段是刻意的硬切（换场/换时间），
+    把上一场末帧钉到下一场第 0 帧会强迫模型做一次变形过渡，比不接更难看。
+    """
+    if not enabled:
+        return 0
+    n = 0
+    prev = None
+    for s in shots:
+        run = shot_run(s)
+        if run and prev is not None and shot_run(prev) == run and not s.get("chain_from_prev"):
+            s["chain_from_prev"] = True
+            n += 1
+        prev = s
+    return n
+
+
+def scene_anchors(plan):
+    """场景 -> 空间锚点文案（知识库镜头表的 Reference Anchors：固定地标 + 屏幕相对位置）。"""
+    out = {}
+    for s in ((plan or {}).get("scenes") or []):
+        a = str(s.get("anchors") or "").strip()
+        if a:
+            out[str(s.get("id") or "")] = a
+    return out
+
+
+def anchor_block(text, anchors):
+    """
+    空间连续块：把同一场景的固定地标与屏幕位置**逐镜重复**。
+
+    为什么需要：同一场景的相邻镜头本该"站在同一张地图上"，但每一镜是独立生成的，
+    模型会自己重新安排空间——灯跑到别处、椅子换了位置、站牌消失。观众感觉就是
+    "每个镜头都像换了地方"，这是"看得莫名其妙"的第二个来源（知识库的镜头表专门有
+    Reference Anchors 一列治它，我先前只在分镜表里写了、没写进提示词）。
+    """
+    if not anchors:
+        return text
+    return (text.rstrip() + "\n\nSPATIAL CONTINUITY (this shot belongs to one continuous scene; the following "
+            "landmarks exist in EVERY shot of this scene and must stay in the same screen positions, at the same "
+            "relative scale — never relocate, duplicate, remove or redesign them): " + anchors)
+
+
 def render_doc_path(pid, episode):
     """某集的渲染清单路径；不传集就是项目级的 _render.json（兼容老用法）。"""
     return project_path(pid, ("_render-%s.json" % episode) if episode else "_render.json")
@@ -856,6 +912,13 @@ def cmd_sync(args):
     if not plan or not plan.get("shots"):
         raise SystemExit("缺少 plan.json 或 shots 为空")
 
+    # **段落内自动接镜**：同一 run 的相邻镜头自动把上一镜末帧钉在第 0 帧。
+    # 实测这是"看得莫名其妙"的根治手段（未接镜的切点 SSIM 0.54~0.71，接了的 0.94）。
+    auto_n = auto_chain_in_runs(plan["shots"], not getattr(args, "no_auto_chain", False))
+    if auto_n:
+        write_json(project_path(pid, "plan.json"), plan)
+        print("段落内自动接镜：%d 处（同一 run 的相邻镜头）" % auto_n)
+
     # 分集过滤：shots.json 永远写**全本**（工作台要看得见所有集），
     # 只有渲染清单 _render-<ep>.json 按集收敛。
     ep = str(getattr(args, "episode", "") or "").strip()
@@ -876,6 +939,9 @@ def cmd_sync(args):
     for c in (plan.get("characters") or []):
         if c.get("id"):
             name_of[str(c["id"])] = c.get("name") or ""
+    anchors = scene_anchors(plan)
+    if anchors:
+        print("空间锚点：%d 个场景已注入逐镜的地标位置块" % len(anchors))
 
     shots, ref_total, with_ref, missing_all, chained, chain_miss = [], 0, 0, [], 0, []
     prev_id = ""
@@ -884,6 +950,8 @@ def cmd_sync(args):
         # 字段名转换是渲染器契约的一部分：方案里叫 h3_prompt（工作台/方案阶段的写法），
         # manju.py 只认 `prompt`。漏了这一步 15 个镜头会全部在 0 秒内报"没有 prompt"。
         one["prompt"] = ensure_mandarin(s.get("h3_prompt") or s.get("prompt") or "")
+        # 空间锚点：同场景每一镜都带上同一套地标位置
+        one["prompt"] = anchor_block(one["prompt"], anchors.get(str(s.get("scene") or "")))
         refs, missing = resolve_refs(pid, s, name_of)
         one.pop("characters", None)
         one.pop("scene", None)
@@ -1494,16 +1562,20 @@ def build_ass(shots, starts, width, height, size_pct=5.0, tail_trim=0.0, fade_ms
             txt = str((d or {}).get("text") or "").strip()
             if not txt:
                 continue
-            is_narr = bool(re.search(r"旁白|narrator|voiceover", str((d or {}).get("speaker") or ""), re.I))
+            name = str((d or {}).get("speaker") or "").strip()
+            is_narr = bool(re.search(r"旁白|narrator|voiceover", name, re.I))
+            # **角色台词带说话人**：观众要能知道是谁在说。
+            # 旁白不加前缀（它本来就没有"人"）。前缀并入折行计算，免得顶出画面。
+            label = "" if (is_narr or not name) else (name + "：")
             t0 = start + each * k
             t1 = start + each * (k + 1) - 0.06
             if t1 - t0 < 0.2:
                 continue
             lines.append("Dialogue: 0,%s,%s,%s,%s,0,0,0,,%s%s" % (
                 ass_time(t0), ass_time(t1), "旁白" if is_narr else "对白",
-                str((d or {}).get("speaker") or ""),
+                name,
                 ("{\\fad(%d,%d)}" % (int(fade_ms), int(fade_ms))) if fade_ms else "",
-                wrap_ass_text(txt, max_units)))
+                wrap_ass_text(label + txt, max_units)))
             n += 1
     return "\n".join(lines), n, size, max_units
 
