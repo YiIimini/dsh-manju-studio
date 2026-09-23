@@ -1942,6 +1942,10 @@ class _Tee(object):
             pass
         try:
             self.fh.write(s)
+            # **每写完一行就刷盘**：工作台的全局作业监视器是 tail 这个文件来显示实时日志的，
+            # 缓冲住的话界面要等到命令结束才有输出（等于没有"实时"）。
+            if s and ("\n" in s):
+                self.fh.flush()
         except Exception:
             pass
         return len(s) if s else 0
@@ -1952,6 +1956,28 @@ class _Tee(object):
                 t.flush()
             except Exception:
                 pass
+
+
+ACTIVE_PATH = os.path.join(ROOT, "_active.json")
+# 进程内的活动记录（写入 _active.json 用；模块级以免 main 里到处传）
+ACTIVE = {}
+
+
+def write_active(payload):
+    """
+    全局活动记录：让工作台**不依赖项目选择**就知道"现在有没有管线在跑、跑到哪了"。
+
+    为什么需要：以前工作台的日志窗口只读"当前项目的历史日志文件"，
+    于是我从命令行起的渲染它一无所知（用户原话：只要管线渲染就要显示实时日志，他不针对单项目）。
+    写法是"临时文件 + rename"，避免界面读到写了一半的 JSON。
+    """
+    try:
+        tmp = ACTIVE_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, ensure_ascii=False, indent=2)
+        os.replace(tmp, ACTIVE_PATH)
+    except Exception:
+        pass
 
 
 def main():
@@ -2058,6 +2084,14 @@ def main():
             logf = open(logpath, "w", encoding="utf-8")
             sys.stdout = _Tee(raw_out, logf)
             sys.stderr = _Tee(raw_err, logf)
+            # 登记全局活动：工作台据此显示实时日志（含命令行发起的渲染）
+            ACTIVE.update({
+                "project": jp, "cmd": args.cmd, "startedAt": time.time(),
+                "iso": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "rel": "%s/output/logs/%s" % (jp, os.path.basename(logpath)),
+                "argv": " ".join(sys.argv[1:]),
+            })
+            write_active(ACTIVE)
         except Exception:
             logf = None
     code = 0
@@ -2072,6 +2106,9 @@ def main():
                 pass
             sys.stdout = raw_out
             sys.stderr = raw_err
+            # 收尾：把结束时间与退出码写回活动记录（界面据此判断"跑完了/失败了"）
+            ACTIVE.update({"endedAt": time.time(), "code": code})
+            write_active(ACTIVE)
             raw_out.write("[log] 已落盘：" + logpath + "\n")
     return code
 
