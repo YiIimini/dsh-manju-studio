@@ -294,5 +294,18 @@ ok(has(cli, 'mj-lok') && has(cli, 'mj-lbad') && has(cli, 'mj-lwarn'), '结果标
 ok(has(cli, 'mj-lnum') && has(cli, 'mj-lpath'), '数字等宽、长路径压暗')
 ok(has(cli, 'word-break:break-word'), '长路径换行而不是撑破行')
 
+console.log('== 不留死空间（成品列表右侧那条空）==')
+// 用户："成品列表 后面留空这么多干嘛？什么 JB 排版" —— 两个来源都是"永久保留的空位"
+ok(!/scrollbar-gutter:stable\}[^`]*/.test(cli) || !/\.mj-plist[^{]*\{[^}]*scrollbar-gutter:stable/.test(cli),
+  '列表不再 scrollbar-gutter:stable（那会给右侧永久留 12px 空槽）')
+ok(has(cli, '.mj-pb,.mj-log,.mj-modalbody,.mj-col{scrollbar-gutter:stable}'), '仍需要稳定 gutter 的面板保留该属性')
+ok(!/\.mj-pinfo\{[^}]*padding-right:26px/.test(cli), '行信息列不再为隐藏按钮预留 26px')
+// 注意：先剥掉 CSS 注释再判 —— 否则会匹配到注释里的字面量（这条断言第一版就栽在自己写的
+// "不再 opacity:0" 说明文字上，代码其实是对的）。
+const cliCss = cli.replace(/\/\*[\s\S]*?\*\//g, '')
+ok(!/\.mj-dots\{[^}]*opacity:0/.test(cliCss), '⋯ 按钮常驻可见（隐藏式按钮会让那一列永远像空的）')
+ok(has(cli, '.mj-dots::after{content:"";position:absolute;inset:-8px}'), '⋯ 命中区撑到 40×40（技能库：密集桌面 ≥40px）')
+ok(has(cli, 'border-radius:var(--mj-r-lg);cursor:pointer'), '行与缩略图同心圆角（外层 = 内层 + 内边距）')
+
 console.log('\n结果：PASS=' + pass + ' FAIL=' + fail)
 process.exit(fail ? 1 : 0)
