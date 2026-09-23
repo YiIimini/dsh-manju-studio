@@ -60,6 +60,15 @@ ROOT = mh.ROOT
 PID = "_driver-test-" + time.strftime("%H%M%S")
 PROJ = os.path.join(ROOT, PID)
 
+# 夹具跑起来会写 <项目根>/_active.json（"全局活动记录"，界面据此显示"外部作业在跑"）。
+# 跑完要还原成原来的样子 —— 否则用户会在工作台的运行条里看到一个莫名其妙的、
+# 早已结束的"外部作业：render --project _driver-test-xxxx"。测试不该在用户界面上留痕。
+ACTIVE_PATH = os.path.join(ROOT, "_active.json")
+try:
+    ACTIVE_BACKUP = open(ACTIVE_PATH, encoding="utf-8").read()
+except Exception:
+    ACTIVE_BACKUP = None
+
 print("== 1. 入口公开面（拆分后仍须从这里拿得到）==")
 PUBLIC = [
     # 路径与 IO
@@ -195,6 +204,19 @@ code, out = run_cli("render", "--project", PID, "--episode", "ep01", "--dry-run"
 ok(code == 0 and "构图检查" in out and "OK" in out, "render --dry-run 构图通过（渲染路径的行为锁）", out.strip()[:80])
 
 shutil.rmtree(PROJ, ignore_errors=True)
+
+# 还原全局活动记录（理由见文件头）：测试不该在用户界面上留痕
+active_ok = True
+try:
+    if ACTIVE_BACKUP is None:
+        if os.path.isfile(ACTIVE_PATH):
+            os.remove(ACTIVE_PATH)
+    else:
+        with open(ACTIVE_PATH, "w", encoding="utf-8") as fh:
+            fh.write(ACTIVE_BACKUP)
+except Exception:
+    active_ok = False
+ok(active_ok, "跑完还原 <项目根>/_active.json（不在工作台的运行条上留下幽灵作业）")
 
 print("\n结果：PASS=%d FAIL=%d" % (_pass, _fail))
 sys.exit(1 if _fail else 0)

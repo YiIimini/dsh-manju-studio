@@ -372,5 +372,17 @@ ok(has(host, '\\\\bord7\\\\3c&H00000000&\\\\fad(60,140)') && has(py, '\\\\bord7\
   '音效大字的描边与淡出两半一致')
 ok(has(cli, 'function cardKindLabel('), '界面把字幕卡标出来（作者要能看出哪句是卡）')
 
+console.log('== 界面提示要说人话 ==')
+// 用户原话："相关提示说明一下啊，莫名奇妙的" —— 指的是界面上那条
+// `cannot write "…": file access denied under workspace-write mode`：
+// 英文 + 内部术语 + 不告诉用户怎么办。这条断言组把"提示必须自解释"钉住。
+ok(has(host, '写文件被 DSH 的安全沙箱拦下了'), '沙箱拦截用中文说清"发生了什么"')
+ok(has(host, '请点这条消息右上角的「复制」'), '并且告诉用户下一步做什么（红条上有复制按钮）')
+ok(!has(host, 'throw new Error(msg + \'（本插件只在'), '不再把裸英文错误直接甩给用户')
+ok(has(cli, '① 建项目'), '一键表单先说清"这一步会做什么"（四步）')
+ok(has(cli, '所以中文书名会自动换成一串短码'), '自动项目 id 为什么是一串码 —— 界面自己解释')
+ok(has(cli, '留空 = 用默认的「3D 动漫脸 + 干净画面」风格句'), '风格句默认值用人话说明（不写内部行话）')
+ok(has(cli, '剩下的内容留给下一集，不会丢'), '字数截断的结果提示用大白话（先给结论，再说原因）')
+
 console.log('\n结果：PASS=' + pass + ' FAIL=' + fail)
 process.exit(fail ? 1 : 0)
