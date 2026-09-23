@@ -245,7 +245,14 @@ ok(has(host, 'episodeCount'), 'summary 给出集数')
 ok(has(host, 'finalCount'), 'summary 给出成片数')
 ok(has(cli, 'Number(p.episodeCount) ? Number(p.episodeCount) + " 集"'), '列表元信息里有集数')
 ok(has(cli, '.mj-pthumb{flex:0 0 auto;width:84px;height:48px'), '封面缩略图放大到 84×48（原来 56×32 认不出画面）')
-ok(has(cli, '.mj-c1{flex:0 0 272px}'), '项目列加宽到 272px')
+ok(has(cli, '.mj-c1{flex:0 0 320px}'), '项目列加宽到 320px（标题原来被挤到只剩 ~110px，只显示"机心…"）')
+ok(has(cli, '-webkit-line-clamp:2'), '标题允许两行，不再单行截断')
+ok(has(cli, '.mj-pbar.done{display:none}'), '渲完的项目不显示进度条（满宽绿条会被读成标题下划线）')
+ok(has(cli, '.mj-bigplay') && has(cli, 'max-height:56vh'), '有大屏播放区（原来面板 30vh + 视频 112px，只能弹小窗看）')
+ok(has(cli, 'setPlayerFor'), '点成片/镜头卡切成大屏播放')
+ok(has(cli, 'const [playerFor, setPlayerFor] = React.useState("")') === false
+  || /const \[purgeArm, setPurgeArm\][\s\S]{0,400}const \[playerFor/.test(cli),
+  '新状态必须加在状态清单末尾（sweep/smoke 按索引注入状态，插中间会整体错位）')
 // 语音验收（ASR）：字幕是后期烧的，跟音轨里真说的话是两回事
 ok(has(py, 'def cmd_voice('), '有 voice：转写成片音轨并与剧本台词逐条比对')
 ok(has(py, 'def _asr_segments('), '按 ASR 分段比对（一句话被切成两段也能命中）')
