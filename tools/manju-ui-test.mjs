@@ -283,5 +283,15 @@ ok(has(cli, 'const ext = (!job && act && act.active'), 'runBar 消费全局活�
 ok(has(cli, 'extLines'), '外部日志与界面作业日志共用同一块显示区')
 ok(has(cli, '外部管线运行中'), '外部作业在窗口里有明确标识（项目/命令/已跑时长）')
 
+console.log('== 日志排版 ==')
+// 用户："运行窗口里的日志排版太丑了吧"
+// 实测：一份真实渲染日志 47 行里有 29 行是重复的进度行（渲染中 30s/60s/…），占可见内容 62%
+ok(has(cli, 'function collapseProgress('), '进度行折叠（同一镜连续进度只留最后一行 + ×N）')
+ok(has(cli, 'function LogLine('), '日志行结构化渲染（不再是整行纯文本）')
+ok(has(cli, 'mj-ltag'), '[标签] 抽成小片')
+ok(has(cli, 'mj-lok') && has(cli, 'mj-lbad') && has(cli, 'mj-lwarn'), '结果标记分色（完成/失败/警告）')
+ok(has(cli, 'mj-lnum') && has(cli, 'mj-lpath'), '数字等宽、长路径压暗')
+ok(has(cli, 'word-break:break-word'), '长路径换行而不是撑破行')
+
 console.log('\n结果：PASS=' + pass + ' FAIL=' + fail)
 process.exit(fail ? 1 : 0)
